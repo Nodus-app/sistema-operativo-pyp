@@ -107,11 +107,14 @@ def fetch_items(cur, desde, hasta):
                v.tipo_comprobante_codigo, v.motivo_cambio_codigo,
                v.motivo_rechazo_desc, v.fecha_comprobante,
                v.vendedor_codigo, v.vendedor_nombre,
+               ch.localidad,
                i.prov_razonsocial, i.prov_codigo,
-               vi.importe_total_c_imp, vi.cantidad, vi.unidades
+               vi.importe_total_c_imp, vi.importe_iva, vi.cantidad, vi.unidades,
+               vi.precio_costo_unitario, vi.precio_unitario, vi.precio_unitario_s_desc
         FROM venta v
         JOIN venta_item vi ON vi.venta_id = v.id AND vi.tenant_id = v.tenant_id
         LEFT JOIN item i ON i.codigo = vi.item_codigo AND i.tenant_id = v.tenant_id
+        LEFT JOIN cliente_hist ch ON ch.hist_id = v.cliente_hist_id AND ch.tenant_id = v.tenant_id
         WHERE v.tenant_id = %(tenant)s
           AND v.fecha_comprobante >= %(desde)s AND v.fecha_comprobante < %(hasta)s
           AND v.tipo_comprobante_codigo IN %(tipos)s
@@ -237,6 +240,77 @@ def build_camion(ordenes):
         a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
         a["pct_cambio"] = round((a["cambio"] / bruta * 100) if bruta else 0, 2)
         a["efectividad"] = round((a["entregas"] / total * 100) if total else 0, 2)
+        a["venta"] = round(a["venta"], 2)
+        a["rechazo"] = round(a["rechazo"], 2)
+        a["cambio"] = round(a["cambio"], 2)
+    out.sort(key=lambda a: -a["venta"])
+    return out
+
+
+def build_rentabilidad_by(items, key_fn):
+    """Rentabilidad = venta neta (sin IVA) - costo (precio_costo_unitario * cantidad).
+    precio_costo_unitario no incluye IVA, por eso la venta se netea de importe_iva antes de comparar
+    (importe_total_c_imp SI incluye IVA, como indica su nombre)."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        key = key_fn(it) or "Sin asignar"
+        a = agg.setdefault(key, {"grupo": key, "venta": 0.0, "costo": 0.0})
+        a["venta"] += abs(sf(it["importe_total_c_imp"]) - sf(it["importe_iva"]))
+        a["costo"] += sf(it["precio_costo_unitario"]) * sf(it["cantidad"])
+    out = list(agg.values())
+    for a in out:
+        a["rentabilidad"] = round(a["venta"] - a["costo"], 2)
+        a["pct_rentabilidad"] = round((a["rentabilidad"] / a["venta"] * 100) if a["venta"] else 0, 2)
+        a["venta"] = round(a["venta"], 2)
+        a["costo"] = round(a["costo"], 2)
+    out.sort(key=lambda a: -a["rentabilidad"])
+    return out
+
+
+def build_descuento_by(items, key_fn):
+    """Descuento = (precio_unitario_s_desc - precio_unitario) * cantidad.
+    El campo venta_item.descuento_importe casi siempre esta en 0 y no refleja el descuento real
+    (verificado contra el Power BI corporativo: precio_unitario_s_desc es el precio de lista)."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        key = key_fn(it) or "Sin asignar"
+        a = agg.setdefault(key, {"grupo": key, "venta_sin_desc": 0.0, "descuento": 0.0})
+        cant = sf(it["cantidad"])
+        a["venta_sin_desc"] += sf(it["precio_unitario_s_desc"]) * cant
+        a["descuento"] += (sf(it["precio_unitario_s_desc"]) - sf(it["precio_unitario"])) * cant
+    out = list(agg.values())
+    for a in out:
+        a["pct_descuento"] = round((a["descuento"] / a["venta_sin_desc"] * 100) if a["venta_sin_desc"] else 0, 2)
+        a["venta_sin_desc"] = round(a["venta_sin_desc"], 2)
+        a["descuento"] = round(a["descuento"], 2)
+    out.sort(key=lambda a: -a["descuento"])
+    return out
+
+
+def build_geografia(ordenes):
+    agg = {}
+    for o in ordenes:
+        # normalizamos may/min: la misma localidad aparece con distinta capitalizacion segun la carga
+        loc = (o["localidad"] or "Sin especificar").strip().upper()
+        a = agg.setdefault(loc, {"localidad": loc, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "clientes": set()})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+        elif es_cambio(o):
+            a["cambio"] += monto
+        elif not es_devolucion(o):
+            a["venta"] += monto
+        if o["cliente_id"] is not None:
+            a["clientes"].add(o["cliente_id"])
+    out = list(agg.values())
+    for a in out:
+        bruta = a["venta"] + a["rechazo"] + a["cambio"]
+        a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+        a["clientes"] = len(a["clientes"])
         a["venta"] = round(a["venta"], 2)
         a["rechazo"] = round(a["rechazo"], 2)
         a["cambio"] = round(a["cambio"], 2)
@@ -386,6 +460,11 @@ def build_mes(ordenes, items):
     d_motivo_prov = build_motivo_por_prov(items)
     d_chofer_prov = build_chofer_por_prov(items)
     d_routes, d_cli = build_routes_and_clientes(ordenes, items)
+    d_rent_prov = build_rentabilidad_by(items, lambda it: it["prov_razonsocial"])
+    d_rent_chofer = build_rentabilidad_by(items, lambda it: it["empleado_chofer_nombre"])
+    d_desc_prov = build_descuento_by(items, lambda it: it["prov_razonsocial"])
+    d_desc_chofer = build_descuento_by(items, lambda it: it["empleado_chofer_nombre"])
+    d_geo = build_geografia(ordenes)
     return {
         "kpis": kpis,
         "prov": d_prov,
@@ -396,6 +475,11 @@ def build_mes(ordenes, items):
         "chofer_prov": d_chofer_prov,
         "routes": d_routes,
         "cli": d_cli,
+        "rent_prov": d_rent_prov,
+        "rent_chofer": d_rent_chofer,
+        "desc_prov": d_desc_prov,
+        "desc_chofer": d_desc_chofer,
+        "geo": d_geo,
         "provs": [p["proveedor"] for p in d_prov],
         "chs": [c["chofer"] for c in d_chofer],
         "camiones": [c["camion"] for c in d_camion],

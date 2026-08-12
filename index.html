@@ -138,6 +138,9 @@ tr:hover td{background:#0f1a2a}
     <button class="tab on" onclick="goTab('ventas',this)">&#x1F4CA; Ventas</button>
     <button class="tab"    onclick="goTab('ruta',this)">🚛 Hoja de Ruta</button>
     <button class="tab"    onclick="goTab('rechazos',this)">&#x26A0; Rechazos</button>
+    <button class="tab"    onclick="goTab('rentabilidad',this)">&#x1F4B9; Rentabilidad</button>
+    <button class="tab"    onclick="goTab('descuentos',this)">&#x1F3F7; Descuentos</button>
+    <button class="tab"    onclick="goTab('geografia',this)">&#x1F30E; Geografía</button>
     <button class="tab"    onclick="goTab('deposito',this)">&#x1F3ED; Dif. Inventario</button>
     <button class="tab"    onclick="goTab('cartones',this)">&#x1F4E6; Cartones</button>
     <button class="tab"    onclick="goTab('conc',this)">&#128241; App &amp; Conciliación</button>
@@ -213,6 +216,53 @@ tr:hover td{background:#0f1a2a}
       <div class="tw"><table>
         <thead><tr><th>Chofer</th><th>Rechazos</th><th>Importe ($)</th><th>% Rechazo</th></tr></thead>
         <tbody id="rej-ch-tb"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- RENTABILIDAD -->
+  <div class="sec" id="sec-rentabilidad">
+    <div class="note">Rentabilidad = Venta − Costo (precio de costo unitario × cantidad), solo sobre líneas de venta (no notas de crédito). Aproximación propia, puede no calzar 100% con el cálculo del Power BI corporativo.</div>
+    <div class="sr" id="rent-kpis"></div>
+    <div class="card"><h3>Por Proveedor <button class="dlbtn" onclick="dlRentProv()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Proveedor</th><th>Venta ($)</th><th>Costo ($)</th><th>Rentabilidad ($)</th><th>% Rentabilidad</th></tr></thead>
+        <tbody id="rent-prov-tb"></tbody>
+      </table></div>
+    </div>
+    <div class="card"><h3>Por Chofer <button class="dlbtn" onclick="dlRentChofer()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Chofer</th><th>Venta ($)</th><th>Costo ($)</th><th>Rentabilidad ($)</th><th>% Rentabilidad</th></tr></thead>
+        <tbody id="rent-ch-tb"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- DESCUENTOS -->
+  <div class="sec" id="sec-descuentos">
+    <div class="note">% Descuento = Descuento / (Venta + Descuento), sobre líneas de venta (no notas de crédito).</div>
+    <div class="sr" id="desc-kpis"></div>
+    <div class="card"><h3>Por Proveedor <button class="dlbtn" onclick="dlDescProv()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Proveedor</th><th>Venta s/Dto ($)</th><th>Descuento ($)</th><th>% Descuento</th></tr></thead>
+        <tbody id="desc-prov-tb"></tbody>
+      </table></div>
+    </div>
+    <div class="card"><h3>Por Chofer <button class="dlbtn" onclick="dlDescChofer()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Chofer</th><th>Venta s/Dto ($)</th><th>Descuento ($)</th><th>% Descuento</th></tr></thead>
+        <tbody id="desc-ch-tb"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- GEOGRAFIA -->
+  <div class="sec" id="sec-geografia">
+    <div class="note">Agrupado por localidad del cliente (no hay mapa: la base BI no tiene coordenadas geográficas).</div>
+    <div class="card"><h3>Por Localidad <button class="dlbtn" onclick="dlGeo()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Localidad</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Cambio ($)</th><th>Clientes</th></tr></thead>
+        <tbody id="geo-tb"></tbody>
       </table></div>
     </div>
   </div>

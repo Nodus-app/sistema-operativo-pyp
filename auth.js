@@ -4,7 +4,7 @@
 var USERS = { 'sup': { pass: 'PypSup2026!', name: 'Supervisor' } };
 var ROLE = 'sup';       // 'sup' | 'vendedor'
 var VEND_COD = null;
-var TABS_VENDEDOR = ['ventas', 'rechazos'];  // unicas visibles para rol vendedor
+var TABS_VENDEDOR = ['ventas', 'rechazos', 'rentabilidad', 'descuentos'];  // unicas visibles para rol vendedor
 
 function F(n) {
   n = Number(n) || 0;
@@ -60,7 +60,11 @@ function doLogout() {
 var MES_ACTIVO = null;
 function curData() {
   var fuente = ROLE === 'vendedor' ? ((D_VEND_DATA[VEND_COD] || {})[MES_ACTIVO]) : D_DATA[MES_ACTIVO];
-  return fuente || { kpis: {}, prov: [], chofer: [], motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {}, provs: [], chs: [] };
+  return fuente || {
+    kpis: {}, prov: [], chofer: [], camion: [], motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {},
+    rent_prov: [], rent_chofer: [], desc_prov: [], desc_chofer: [], geo: [],
+    provs: [], chs: [], camiones: [],
+  };
 }
 
 function initMesSelector() {
@@ -79,6 +83,9 @@ function onMesChange() {
   if (CURRENT_TAB === 'ventas') renderVentas();
   if (CURRENT_TAB === 'ruta') initRuta();
   if (CURRENT_TAB === 'rechazos') renderRechazos();
+  if (CURRENT_TAB === 'rentabilidad') renderRentabilidad();
+  if (CURRENT_TAB === 'descuentos') renderDescuentos();
+  if (CURRENT_TAB === 'geografia') renderGeografia();
   TAB_INIT[CURRENT_TAB] = true;
 }
 
@@ -96,6 +103,9 @@ function goTab(id, btn) {
     if (id === 'ventas') renderVentas();
     if (id === 'ruta') initRuta();
     if (id === 'rechazos') renderRechazos();
+    if (id === 'rentabilidad') renderRentabilidad();
+    if (id === 'descuentos') renderDescuentos();
+    if (id === 'geografia') renderGeografia();
   }
 }
 
@@ -285,6 +295,58 @@ function renderRechazos() {
   }).join('') : '<tr><td colspan="4" class="empty">Sin rechazos en el período</td></tr>';
 }
 
+// ---------- RENTABILIDAD ----------
+function rentRow(a) {
+  return '<tr><td>' + a.grupo + '</td><td>$' + F(a.venta) + '</td><td>$' + F(a.costo) + '</td>' +
+    '<td>$' + F(a.rentabilidad) + '</td><td><span class="' + (a.pct_rentabilidad < 0 ? 'br' : (a.pct_rentabilidad < 10 ? 'by' : 'bg')) + '">' + P(a.pct_rentabilidad) + '</span></td></tr>';
+}
+function renderRentabilidad() {
+  var d = curData();
+  var totVenta = d.rent_prov.reduce(function (s, a) { return s + a.venta; }, 0);
+  var totCosto = d.rent_prov.reduce(function (s, a) { return s + a.costo; }, 0);
+  var totRent = totVenta - totCosto;
+  document.getElementById('rent-kpis').innerHTML =
+    KPI('Venta', '$' + F(totVenta), '#00e5ff') +
+    KPI('Costo', '$' + F(totCosto), '#ffab40') +
+    KPI('Rentabilidad', '$' + F(totRent), totRent >= 0 ? '#69f0ae' : '#ff5252') +
+    KPI('% Rentabilidad', P(totVenta ? totRent / totVenta * 100 : 0), totRent >= 0 ? '#69f0ae' : '#ff5252');
+
+  document.getElementById('rent-prov-tb').innerHTML = d.rent_prov.length
+    ? d.rent_prov.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('rent-ch-tb').innerHTML = d.rent_chofer.length
+    ? d.rent_chofer.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+}
+
+// ---------- DESCUENTOS ----------
+function descRow(a) {
+  return '<tr><td>' + a.grupo + '</td><td>$' + F(a.venta_sin_desc) + '</td><td>$' + F(a.descuento) + '</td>' +
+    '<td><span class="' + pctClass(a.pct_descuento) + '">' + P(a.pct_descuento) + '</span></td></tr>';
+}
+function renderDescuentos() {
+  var d = curData();
+  var totDesc = d.desc_prov.reduce(function (s, a) { return s + a.descuento; }, 0);
+  var totSinDesc = d.desc_prov.reduce(function (s, a) { return s + a.venta_sin_desc; }, 0);
+  document.getElementById('desc-kpis').innerHTML =
+    KPI('Venta sin Dto.', '$' + F(totSinDesc), '#e3ecf7') +
+    KPI('Descuento', '$' + F(totDesc), '#ffab40') +
+    KPI('% Descuento', P(totSinDesc ? totDesc / totSinDesc * 100 : 0), '#ffab40');
+
+  document.getElementById('desc-prov-tb').innerHTML = d.desc_prov.length
+    ? d.desc_prov.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('desc-ch-tb').innerHTML = d.desc_chofer.length
+    ? d.desc_chofer.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
+}
+
+// ---------- GEOGRAFIA ----------
+function renderGeografia() {
+  var d = curData();
+  document.getElementById('geo-tb').innerHTML = d.geo.length ? d.geo.map(function (g) {
+    return '<tr><td>' + g.localidad + '</td><td>$' + F(g.venta) + '</td><td>$' + F(g.rechazo) + '</td>' +
+      '<td><span class="' + pctClass(g.pct_rechazo) + '">' + P(g.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(g.cambio) + '</td><td>' + FI(g.clientes) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="empty">Sin datos en el período</td></tr>';
+}
+
 // ---------- EXPORT EXCEL ----------
 function dl(rows, filename) {
   var ws = XLSX.utils.json_to_sheet(rows);
@@ -302,6 +364,11 @@ function dlChofer() {
 function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
 function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlCamion() { dl(curData().camion, 'pyp_ventas_por_camion_' + MES_ACTIVO + '.xlsx'); }
+function dlRentProv() { dl(curData().rent_prov, 'pyp_rentabilidad_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlRentChofer() { dl(curData().rent_chofer, 'pyp_rentabilidad_por_chofer_' + MES_ACTIVO + '.xlsx'); }
+function dlDescProv() { dl(curData().desc_prov, 'pyp_descuentos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlDescChofer() { dl(curData().desc_chofer, 'pyp_descuentos_por_chofer_' + MES_ACTIVO + '.xlsx'); }
+function dlGeo() { dl(curData().geo, 'pyp_geografia_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {
   var d = curData();
   var rows = [];
