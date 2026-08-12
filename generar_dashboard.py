@@ -86,7 +86,8 @@ def fetch_ordenes(cur, desde, hasta):
                v.fecha_comprobante, v.numero_comprobante, v.tipo_comprobante_codigo,
                v.motivo_rechazo_codigo, v.motivo_rechazo_desc,
                v.motivo_cambio_codigo, v.motivo_cambio_desc,
-               v.importe_total, v.importe_neto
+               v.importe_total, v.importe_neto,
+               v.vendedor_codigo, v.vendedor_nombre
         FROM venta v
         LEFT JOIN cliente_hist ch ON ch.hist_id = v.cliente_hist_id AND ch.tenant_id = v.tenant_id
         WHERE v.tenant_id = %(tenant)s
@@ -105,6 +106,7 @@ def fetch_items(cur, desde, hasta):
         SELECT v.id AS venta_id, v.reparto_id, v.empleado_chofer_nombre,
                v.tipo_comprobante_codigo, v.motivo_cambio_codigo,
                v.motivo_rechazo_desc, v.fecha_comprobante,
+               v.vendedor_codigo, v.vendedor_nombre,
                i.prov_razonsocial, i.prov_codigo,
                vi.importe_total_c_imp, vi.cantidad, vi.unidades
         FROM venta v
@@ -189,6 +191,35 @@ def build_chofer(ordenes):
     for o in ordenes:
         ch = o["empleado_chofer_nombre"] or "Sin asignar"
         a = agg.setdefault(ch, {"chofer": ch, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "entregas": 0, "rechazos": 0, "cambios": 0})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+            a["rechazos"] += 1
+        elif es_cambio(o):
+            a["cambio"] += monto
+            a["cambios"] += 1
+        elif not es_devolucion(o):
+            a["venta"] += monto
+            a["entregas"] += 1
+    out = list(agg.values())
+    for a in out:
+        total = a["entregas"] + a["rechazos"] + a["cambios"]
+        bruta = a["venta"] + a["rechazo"] + a["cambio"]
+        a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+        a["pct_cambio"] = round((a["cambio"] / bruta * 100) if bruta else 0, 2)
+        a["efectividad"] = round((a["entregas"] / total * 100) if total else 0, 2)
+        a["venta"] = round(a["venta"], 2)
+        a["rechazo"] = round(a["rechazo"], 2)
+        a["cambio"] = round(a["cambio"], 2)
+    out.sort(key=lambda a: -a["venta"])
+    return out
+
+
+def build_camion(ordenes):
+    agg = {}
+    for o in ordenes:
+        cam = o["vehiculo_descripcion"] or o["vehiculo_codigo"] or "Sin asignar"
+        a = agg.setdefault(cam, {"camion": cam, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "entregas": 0, "rechazos": 0, "cambios": 0})
         monto = sf(o["importe_total"])
         if es_rechazo_puro(o):
             a["rechazo"] += monto
@@ -350,6 +381,7 @@ def build_mes(ordenes, items):
     kpis = build_kpis(ordenes)
     d_prov = build_prov(items)
     d_chofer = build_chofer(ordenes)
+    d_camion = build_camion(ordenes)
     d_motivo = build_motivo(ordenes)
     d_motivo_prov = build_motivo_por_prov(items)
     d_chofer_prov = build_chofer_por_prov(items)
@@ -358,6 +390,7 @@ def build_mes(ordenes, items):
         "kpis": kpis,
         "prov": d_prov,
         "chofer": d_chofer,
+        "camion": d_camion,
         "motivo": d_motivo,
         "motivo_prov": d_motivo_prov,
         "chofer_prov": d_chofer_prov,
@@ -365,6 +398,7 @@ def build_mes(ordenes, items):
         "cli": d_cli,
         "provs": [p["proveedor"] for p in d_prov],
         "chs": [c["chofer"] for c in d_chofer],
+        "camiones": [c["camion"] for c in d_camion],
     }
 
 
@@ -400,11 +434,39 @@ def main():
 
     mes_actual = meses[0] if meses else mes_key(ahora)
 
+    # ---- datos por vendedor (login individual) ----
+    vnom = {}
+    for o in ordenes:
+        cod = o["vendedor_codigo"]
+        if cod:
+            vnom[str(cod)] = o["vendedor_nombre"] or ("Vendedor " + str(cod))
+    vvalidos = sorted(vnom.keys(), key=lambda c: (len(c), c))
+    print(f"Vendedores activos: {vvalidos}")
+
+    d_vend_data = {}
+    for cod in vvalidos:
+        ord_v = [o for o in ordenes if str(o["vendedor_codigo"]) == cod]
+        it_v = [it for it in items if str(it["vendedor_codigo"]) == cod]
+        ord_v_por_mes = {}
+        for o in ord_v:
+            ord_v_por_mes.setdefault(mes_key(o["fecha_comprobante"]), []).append(o)
+        it_v_por_mes = {}
+        for it in it_v:
+            it_v_por_mes.setdefault(mes_key(it["fecha_comprobante"]), []).append(it)
+        meses_v = sorted(set(ord_v_por_mes) | set(it_v_por_mes), reverse=True)
+        d_vend_data[cod] = {
+            m: build_mes(ord_v_por_mes.get(m, []), it_v_por_mes.get(m, []))
+            for m in meses_v
+        }
+
     blocks = [
         make_json("D_MESES", meses),
         make_json("D_MES_LABEL", d_mes_label),
         make_json("D_MES_ACTUAL", mes_actual),
         make_json("D_DATA", d_data),
+        make_json("D_VVALIDOS", vvalidos),
+        make_json("D_VNOM", vnom),
+        make_json("D_VEND_DATA", d_vend_data),
     ]
     data_js = "\n".join(blocks)
 

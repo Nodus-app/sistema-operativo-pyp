@@ -1,6 +1,10 @@
 // PYP Logistica - Dashboard Operativo - app.js
-// Login cosmetico (protege por UX, no es seguridad real: repo/sitio es privado).
+// Login cosmetico (protege por UX, no es seguridad real: repo publico, todos los
+// datos de todos los vendedores viajan igual en el HTML sea cual sea el login usado).
 var USERS = { 'sup': { pass: 'PypSup2026!', name: 'Supervisor' } };
+var ROLE = 'sup';       // 'sup' | 'vendedor'
+var VEND_COD = null;
+var TABS_VENDEDOR = ['ventas', 'rechazos'];  // unicas visibles para rol vendedor
 
 function F(n) {
   n = Number(n) || 0;
@@ -20,17 +24,32 @@ function KPI(label, value, cls) {
 }
 
 function doLogin() {
-  var u = (document.getElementById('lu').value || '').trim().toLowerCase();
+  var uRaw = (document.getElementById('lu').value || '').trim();
+  var u = uRaw.toLowerCase();
   var p = (document.getElementById('lp').value || '').trim();
   var usr = USERS[u];
+
   if (usr && p === usr.pass) {
-    document.getElementById('login-overlay').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    sessionStorage.setItem('pyp_auth', '1');
-    initApp();
-  } else {
-    document.getElementById('lerr').style.display = 'block';
+    ROLE = 'sup'; VEND_COD = null;
+    sessionStorage.setItem('pyp_auth', 'sup');
+    entrar();
+    return;
   }
+
+  // Vendedor: usuario = numero de vendedor, clave = numero repetido (ej. vendedor 3 -> "33")
+  if (/^\d+$/.test(uRaw) && D_VVALIDOS.indexOf(uRaw) !== -1 && p === uRaw + uRaw) {
+    ROLE = 'vendedor'; VEND_COD = uRaw;
+    sessionStorage.setItem('pyp_auth', 'vendedor:' + uRaw);
+    entrar();
+    return;
+  }
+
+  document.getElementById('lerr').style.display = 'block';
+}
+function entrar() {
+  document.getElementById('login-overlay').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  initApp();
 }
 function doLogout() {
   sessionStorage.removeItem('pyp_auth');
@@ -39,7 +58,10 @@ function doLogout() {
 
 // ---------- PERIODO (mes) ----------
 var MES_ACTIVO = null;
-function curData() { return D_DATA[MES_ACTIVO] || { kpis: {}, prov: [], chofer: [], motivo: [], routes: [], cli: {}, provs: [], chs: [] }; }
+function curData() {
+  var fuente = ROLE === 'vendedor' ? ((D_VEND_DATA[VEND_COD] || {})[MES_ACTIVO]) : D_DATA[MES_ACTIVO];
+  return fuente || { kpis: {}, prov: [], chofer: [], motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {}, provs: [], chs: [] };
+}
 
 function initMesSelector() {
   var sel = document.getElementById('hdr-mes');
@@ -78,9 +100,31 @@ function goTab(id, btn) {
 }
 
 function initApp() {
+  applyRoleUI();
   initMesSelector();
   renderVentas();
-  TAB_INIT['ventas'] = true;
+  TAB_INIT = { ventas: true };
+  CURRENT_TAB = 'ventas';
+  document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('on'); });
+  document.querySelectorAll('.sec').forEach(function (s) { s.classList.remove('on'); });
+  document.getElementById('sec-ventas').classList.add('on');
+  var firstTab = document.querySelector('.tabs .tab:not([style*="display: none"])');
+  if (firstTab) firstTab.classList.add('on');
+}
+
+function applyRoleUI() {
+  var badge = document.getElementById('hdr-rol');
+  document.querySelectorAll('.tabs .tab').forEach(function (btn) {
+    var id = (btn.getAttribute('onclick') || '').match(/goTab\('(\w+)'/);
+    id = id ? id[1] : null;
+    var visible = ROLE === 'sup' || TABS_VENDEDOR.indexOf(id) !== -1;
+    btn.style.display = visible ? '' : 'none';
+  });
+  if (ROLE === 'vendedor') {
+    badge.textContent = '— ' + (D_VNOM[VEND_COD] || ('Vendedor ' + VEND_COD));
+  } else {
+    badge.textContent = '— Supervisor';
+  }
 }
 
 // ---------- VENTAS ----------
@@ -118,6 +162,22 @@ function renderVentas() {
   var chTb = document.getElementById('ven-ch-tb');
   chTb.innerHTML = chofer.length ? chofer.map(function (c) {
     return '<tr><td>' + c.chofer + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.rechazo) + '</td>' +
+      '<td><span class="' + pctClass(c.pct_rechazo) + '">' + P(c.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(c.cambio) + '</td><td><span class="' + pctClass(c.pct_cambio) + '">' + P(c.pct_cambio) + '</span></td>' +
+      '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + c.efectividad + '%;background:#00e5ff"></div></div>' + P(c.efectividad) + '</div></td></tr>';
+  }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
+
+  var camSel = document.getElementById('ven-cam-f');
+  var prevCam = camSel.value;
+  camSel.innerHTML = '<option value="">Todos</option>' + d.camiones.map(function (c) {
+    return '<option value="' + c + '">' + c + '</option>';
+  }).join('');
+  if (d.camiones.indexOf(prevCam) !== -1) camSel.value = prevCam;
+  var camSelVal = camSel.value;
+  var camiones = camSelVal ? d.camion.filter(function (c) { return c.camion === camSelVal; }) : d.camion;
+  var camTb = document.getElementById('ven-cam-tb');
+  camTb.innerHTML = camiones.length ? camiones.map(function (c) {
+    return '<tr><td>' + c.camion + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.rechazo) + '</td>' +
       '<td><span class="' + pctClass(c.pct_rechazo) + '">' + P(c.pct_rechazo) + '</span></td>' +
       '<td>$' + F(c.cambio) + '</td><td><span class="' + pctClass(c.pct_cambio) + '">' + P(c.pct_cambio) + '</span></td>' +
       '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + c.efectividad + '%;background:#00e5ff"></div></div>' + P(c.efectividad) + '</div></td></tr>';
@@ -241,6 +301,7 @@ function dlChofer() {
 }
 function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
 function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlCamion() { dl(curData().camion, 'pyp_ventas_por_camion_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {
   var d = curData();
   var rows = [];
@@ -258,10 +319,13 @@ function dlRuta() {
 
 // ---------- INIT / SESSION / SW ----------
 window.addEventListener('load', function () {
-  if (sessionStorage.getItem('pyp_auth') === '1') {
-    document.getElementById('login-overlay').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    initApp();
+  var saved = sessionStorage.getItem('pyp_auth');
+  if (saved === 'sup') {
+    ROLE = 'sup'; VEND_COD = null;
+    entrar();
+  } else if (saved && saved.indexOf('vendedor:') === 0) {
+    ROLE = 'vendedor'; VEND_COD = saved.split(':')[1];
+    entrar();
   }
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('service-worker.js').catch(function () {});
