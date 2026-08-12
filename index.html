@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="build-ts" content="0">
+<title>Dashboard Operativo — PYP Logística</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d1a33'/%3E%3Ctext x='32' y='42' font-size='26' font-weight='900' text-anchor='middle' fill='%232979ff' font-family='Arial'%3EPP%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0e17">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0e17;color:#e3ecf7;min-height:100vh}
+
+#login-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:9999;background:radial-gradient(ellipse at 20% 50%,#0a1a2a 0%,#0a0a1a 40%,#050710 100%);overflow:hidden}
+#login-overlay::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 80% 20%,#2979ff20 0%,transparent 50%),radial-gradient(ellipse at 20% 80%,#00e5ff20 0%,transparent 50%);pointer-events:none}
+.login-box{position:relative;background:linear-gradient(145deg,#12182800,#0d1420);border:1px solid #ffffff15;border-radius:20px;padding:48px 40px;width:340px;text-align:center;box-shadow:0 25px 60px #00000088,0 0 0 1px #2979ff15;backdrop-filter:blur(20px)}
+.login-logo-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:6px}
+.login-logo-wrap .logo-mark{height:52px;width:52px;border-radius:12px;background:linear-gradient(135deg,#1a2a4a,#0d1626);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.3rem;color:#2979ff;box-shadow:0 0 20px #2979ff40}
+.login-brand{font-size:1.5rem;font-weight:900;letter-spacing:.04em;line-height:1}
+.login-brand .pyp{color:#2979ff;text-shadow:0 0 20px #2979ff80}
+.login-brand .log{color:#e8eef6}
+.login-sub{color:#5c7ba8;font-size:.8rem;margin-bottom:32px;letter-spacing:.08em;text-transform:uppercase}
+.login-field input{width:100%;background:#ffffff08;border:1px solid #ffffff15;border-radius:10px;padding:12px 16px;color:#e8eef6;font-size:.92rem;margin-bottom:14px;outline:none;transition:all .25s;box-sizing:border-box}
+.login-field input::placeholder{color:#ffffff40}
+.login-field input:focus{border-color:#2979ff60;background:#ffffff12;box-shadow:0 0 0 3px #2979ff20}
+.login-btn{width:100%;background:linear-gradient(135deg,#1565c0,#2979ff,#448aff);color:white;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;margin-top:4px;transition:all .25s;letter-spacing:.04em;box-shadow:0 4px 20px #2979ff40}
+.login-btn:hover{transform:translateY(-1px);box-shadow:0 8px 30px #2979ff60}
+.login-btn:active{transform:translateY(0)}
+.login-err{color:#ff8a8a;font-size:.82rem;margin-top:10px;display:none}
+
+#app{display:none}
+.hdr{background:#0d1626;border-bottom:1px solid #2979ff22;padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:50px;flex-wrap:wrap}
+.btn-salir{background:none;border:1px solid #2979ff40;color:#5c9dff;border-radius:6px;padding:5px 12px;font-size:.78rem;cursor:pointer;transition:all .2s}
+.btn-salir:hover{border-color:#00e5ff;color:#00e5ff}
+
+.tabs{display:flex;gap:2px;padding:10px 20px 0;background:#0d1626;border-bottom:1px solid #2979ff22;flex-wrap:wrap}
+.tab{padding:8px 16px;font-size:.82rem;font-weight:600;color:#5c9dff;cursor:pointer;border-radius:6px 6px 0 0;border:none;background:none;transition:all .2s}
+.tab.on{background:#0a0e17;color:#00e5ff;border:1px solid #00e5ff33;border-bottom:1px solid #0a0e17;text-shadow:0 0 8px #00e5ff66}
+.tab:hover:not(.on){color:#2979ff}
+
+.sec{display:none;padding:18px 20px}.sec.on{display:block}
+.card{background:#0d1626;border:1px solid #2979ff30;border-radius:12px;padding:16px;margin-bottom:14px;transition:border-color .2s}
+.card:hover{border-color:#00e5ff22}
+.card h3{font-size:.78rem;font-weight:700;color:#5c9dff;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.g2{grid-template-columns:1fr}}
+
+.sr{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.kpi{background:#0d1626;border:1px solid #2979ff30;border-radius:10px;padding:14px 16px;min-width:130px;flex:1;transition:all .2s;position:relative;overflow:hidden}
+.kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#2979ff,#00e5ff)}
+.kpi:hover{border-color:#00e5ff44;box-shadow:0 4px 20px #00e5ff11}
+.kpi-v{font-size:1.4rem;font-weight:800;line-height:1}
+.kpi-l{font-size:.72rem;color:#5c7ba8;margin-top:4px}
+
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{background:#090c14;color:#5c9dff;font-weight:600;text-align:left;padding:9px 10px;border-bottom:1px solid #2979ff30;white-space:nowrap;letter-spacing:.3px}
+td{padding:8px 10px;border-bottom:1px solid #0e1420;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#0f1a2a}
+
+.empty{text-align:center;color:#2a3a55;padding:20px}
+.bg{background:#00695c30;color:#69f0ae;border-radius:5px;padding:2px 8px;font-size:.74rem;font-weight:700;white-space:nowrap}
+.br{background:#b7131320;color:#ff5252;border-radius:5px;padding:2px 8px;font-size:.74rem;font-weight:700;white-space:nowrap}
+.by{background:#e6510030;color:#ffab40;border-radius:5px;padding:2px 8px;font-size:.74rem;font-weight:700;white-space:nowrap}
+.bp{background:#0d1a4a;color:#4d9fff;border-radius:5px;padding:2px 8px;font-size:.74rem;font-weight:700;white-space:nowrap}
+
+.pw{display:flex;align-items:center;gap:6px}
+.pb{background:#2979ff30;border-radius:4px;height:6px;flex:1;min-width:40px;overflow:hidden}
+.pf{height:100%;border-radius:4px}
+
+.fbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.fbar label{font-size:.78rem;color:#5c7ba8}
+.fbar select,.fbar input{background:#0d1626;border:1px solid #2979ff30;color:#e3ecf7;border-radius:7px;padding:6px 10px;font-size:.8rem;outline:none;transition:border-color .2s}
+.fbar select:focus,.fbar input:focus{border-color:#00e5ff}
+.fbar input{min-width:180px}
+
+.dlbtn{background:#0d3a6630;color:#00e5ff;border:1px solid #00e5ff;border-radius:6px;padding:3px 10px;font-size:.76rem;cursor:pointer;margin-left:8px}
+
+.ruta-layout{display:grid;grid-template-columns:300px 1fr;gap:14px;height:calc(100vh - 160px)}
+@media(max-width:800px){.ruta-layout{grid-template-columns:1fr;height:auto}}
+.rsl{overflow-y:auto;height:100%}
+.ri{background:#0d1626;border:1px solid #2979ff30;border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;transition:all .2s}
+.ri.on{border-color:#00e5ff;box-shadow:0 0 12px #00e5ff22}
+.ri:hover{border-color:#2979ff50}
+.ri-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.ri-ch{font-weight:700;font-size:.85rem;color:#00e5ff}
+.ri-rep{font-size:.72rem;color:#5c7ba8}
+.ri-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:.72rem;color:#5c7ba8;margin-top:4px}
+.rdet{background:#0d1626;border:1px solid #2979ff30;border-radius:10px;padding:14px;overflow-y:auto;height:100%}
+.cli-row{border-bottom:1px solid #0e1420;padding:10px 0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;transition:background .2s}
+.cli-row:hover{background:#0f1a2a55;border-radius:6px;padding:10px 6px}
+.cli-row:last-child{border-bottom:none}
+.cli-name{font-weight:700;font-size:.85rem}
+.cli-addr{font-size:.75rem;color:#5c7ba8}
+.cli-meta{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap}
+.cli-right{text-align:right;font-size:.8rem;white-space:nowrap}
+.note{font-size:.75rem;color:#5c9dff;background:#0d1626;border:1px solid #2979ff30;border-radius:8px;padding:8px 12px;margin-bottom:12px}
+.note.ny{border-color:#e6510030;color:#ffab40}
+.soon{text-align:center;padding:60px 20px;color:#5c7ba8}
+.soon .icon{font-size:2.4rem;margin-bottom:12px}
+.soon h3{color:#e3ecf7;font-size:1rem;margin-bottom:6px}
+.soon p{font-size:.82rem;max-width:420px;margin:0 auto}
+</style>
+</head>
+<body>
+<div id="login-overlay">
+  <div class="login-box">
+    <div class="login-logo-wrap">
+      <div class="logo-mark">PP</div>
+      <div class="login-brand"><span class="pyp">PYP</span> <span class="log">LOGÍSTICA</span></div>
+    </div>
+    <div class="login-sub">Dashboard Operativo</div>
+    <div class="login-field">
+      <input type="text" id="lu" placeholder="Usuario" autocomplete="username">
+      <input type="password" id="lp" placeholder="Contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="login-btn" onclick="doLogin()">Ingresar</button>
+    <div class="login-err" id="lerr">Usuario o contraseña incorrectos</div>
+  </div>
+</div>
+<div id="app">
+  <div class="hdr">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="height:36px;width:36px;border-radius:8px;background:linear-gradient(135deg,#1a2a4a,#0d1626);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:.8rem;color:#2979ff">PP</div>
+      <div style="display:flex;flex-direction:column;justify-content:center">
+        <span style="font-size:.95rem;font-weight:800;letter-spacing:.02em"><span style="color:#2979ff">PYP</span> <span style="color:#e8eef6">LOGÍSTICA</span> <span style="font-size:.65rem;color:#5c7ba8;font-weight:500">&mdash; Dashboard Operativo</span></span>
+      </div>
+      <label style="font-size:.72rem;color:#5c7ba8;margin-left:6px">Per&iacute;odo</label>
+      <select id="hdr-mes" onchange="onMesChange()" style="background:#0d1626;border:1px solid #2979ff30;color:#e3ecf7;border-radius:7px;padding:5px 10px;font-size:.78rem;outline:none"></select>
+      <span style="font-size:.68rem;color:#5c9dff;margin-left:8px">&#128197; Actualizado: <span id="hdr-build-ts"></span></span>
+    </div>
+    <button class="btn-salir" onclick="doLogout()">Salir</button>
+  </div>
+  <div class="tabs">
+    <button class="tab on" onclick="goTab('ventas',this)">&#x1F4CA; Ventas</button>
+    <button class="tab"    onclick="goTab('ruta',this)">🚛 Hoja de Ruta</button>
+    <button class="tab"    onclick="goTab('rechazos',this)">&#x26A0; Rechazos</button>
+    <button class="tab"    onclick="goTab('deposito',this)">&#x1F3ED; Dif. Inventario</button>
+    <button class="tab"    onclick="goTab('cartones',this)">&#x1F4E6; Cartones</button>
+    <button class="tab"    onclick="goTab('conc',this)">&#128241; App &amp; Conciliación</button>
+    <button class="tab"    onclick="goTab('comisiones',this)">&#x1F4B0; Comisiones</button>
+  </div>
+
+  <!-- VENTAS -->
+  <div class="sec on" id="sec-ventas">
+    <div class="sr" id="ven-kpis"></div>
+    <div class="card"><h3>Ventas por Proveedor <button class="dlbtn" onclick="dlProv()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Proveedor</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Unidades</th></tr></thead>
+        <tbody id="ven-prov-tb"></tbody>
+      </table></div>
+    </div>
+    <div class="card"><h3>Ventas por Chofer <button class="dlbtn" onclick="dlChofer()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Chofer</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Efectividad</th></tr></thead>
+        <tbody id="ven-ch-tb"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- HOJA DE RUTA -->
+  <div class="sec" id="sec-ruta">
+    <div class="fbar">
+      <label>Chofer</label>
+      <select id="ruta-ch" onchange="filtRuta()"><option value="">Todos</option></select>
+      <input id="ruta-q" placeholder="Buscar cliente o dirección..." oninput="filtRuta()">
+      <button class="dlbtn" onclick="dlRuta()">&#11015; Excel</button>
+    </div>
+    <div class="ruta-layout">
+      <div class="rsl" id="rsl"></div>
+      <div class="rdet" id="rdet"><div style="color:#5c7ba8;padding:20px">Seleccion&aacute; un reparto</div></div>
+    </div>
+  </div>
+
+  <!-- RECHAZOS -->
+  <div class="sec" id="sec-rechazos">
+    <div class="note">Rechazo/Cambio = notas de cr&eacute;dito (NCR). Rechazo puro = NCR sin motivo de canje; Cambio = NCR con motivo de canje.</div>
+    <div class="sr" id="rej-kpis"></div>
+    <div class="card"><h3>Por Motivo <button class="dlbtn" onclick="dlMotivo()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Motivo</th><th>Cantidad</th><th>Importe ($)</th><th>% del total</th></tr></thead>
+        <tbody id="rej-mot-tb"></tbody>
+      </table></div>
+    </div>
+    <div class="card"><h3>Por Chofer</h3>
+      <div class="tw"><table>
+        <thead><tr><th>Chofer</th><th>Rechazos</th><th>Importe ($)</th><th>% Rechazo</th></tr></thead>
+        <tbody id="rej-ch-tb"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- PLACEHOLDERS -->
+  <div class="sec" id="sec-deposito"><div class="soon"><div class="icon">&#x1F3ED;</div><h3>Dif. Inventario &mdash; Pr&oacute;ximamente</h3><p>Necesitamos que la r&eacute;plica BI incluya el hist&oacute;rico de movimientos de stock (hoy solo tenemos la foto actual). Se habilita en cuanto esa tabla est&eacute; disponible.</p></div></div>
+  <div class="sec" id="sec-cartones"><div class="soon"><div class="icon">&#x1F4E6;</div><h3>Cartones &mdash; Pr&oacute;ximamente</h3><p>No hay todav&iacute;a una fuente de datos para retorno de envases/cajones en la base BI.</p></div></div>
+  <div class="sec" id="sec-conc"><div class="soon"><div class="icon">&#128241;</div><h3>App &amp; Conciliaci&oacute;n &mdash; Pr&oacute;ximamente</h3><p>Falta la fuente del registro de rechazos reportados por la app del chofer.</p></div></div>
+  <div class="sec" id="sec-comisiones"><div class="soon"><div class="icon">&#x1F4B0;</div><h3>Comisiones &mdash; Pr&oacute;ximamente</h3><p>Fuera de alcance por ahora.</p></div></div>
+</div>
+
+<script><!-- DATA_START -->
+var D_MESES=[];var D_MES_LABEL={};var D_MES_ACTUAL="";var D_DATA={};
+<!-- DATA_END --></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="auth.js"></script>
+</body>
+</html>
