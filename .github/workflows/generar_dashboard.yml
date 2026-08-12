@@ -8,6 +8,9 @@ on:
       - 'generar_dashboard.py'
       - 'index.html'
       - 'auth.js'
+concurrency:
+  group: dashboard-build
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
