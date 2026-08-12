@@ -4,7 +4,7 @@
 var USERS = { 'sup': { pass: 'PypSup2026!', name: 'Supervisor' } };
 var ROLE = 'sup';       // 'sup' | 'vendedor'
 var VEND_COD = null;
-var TABS_VENDEDOR = ['ventas', 'rechazos', 'rentabilidad', 'descuentos'];  // unicas visibles para rol vendedor
+var TABS_VENDEDOR = ['ventas', 'rechazos', 'rentabilidad', 'descuentos', 'objetivo', 'clientes', 'producto'];  // unicas visibles para rol vendedor (evolucion queda solo para supervisor)
 
 function F(n) {
   n = Number(n) || 0;
@@ -63,6 +63,7 @@ function curData() {
   return fuente || {
     kpis: {}, prov: [], chofer: [], camion: [], motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {},
     rent_prov: [], rent_chofer: [], desc_prov: [], desc_chofer: [], geo: [],
+    vendedor: [], producto: [], rubro: [], clientes: [],
     provs: [], chs: [], camiones: [],
   };
 }
@@ -86,6 +87,10 @@ function onMesChange() {
   if (CURRENT_TAB === 'rentabilidad') renderRentabilidad();
   if (CURRENT_TAB === 'descuentos') renderDescuentos();
   if (CURRENT_TAB === 'geografia') renderGeografia();
+  if (CURRENT_TAB === 'objetivo') renderObjetivo();
+  if (CURRENT_TAB === 'evolucion') renderEvolucion();
+  if (CURRENT_TAB === 'clientes') renderClientes();
+  if (CURRENT_TAB === 'producto') renderProducto();
   TAB_INIT[CURRENT_TAB] = true;
 }
 
@@ -106,6 +111,10 @@ function goTab(id, btn) {
     if (id === 'rentabilidad') renderRentabilidad();
     if (id === 'descuentos') renderDescuentos();
     if (id === 'geografia') renderGeografia();
+    if (id === 'objetivo') renderObjetivo();
+    if (id === 'evolucion') renderEvolucion();
+    if (id === 'clientes') renderClientes();
+    if (id === 'producto') renderProducto();
   }
 }
 
@@ -347,6 +356,53 @@ function renderGeografia() {
   }).join('') : '<tr><td colspan="6" class="empty">Sin datos en el período</td></tr>';
 }
 
+// ---------- OBJETIVO DEL MES ----------
+function renderObjetivo() {
+  var d = curData();
+  var totObj = d.vendedor.reduce(function (s, a) { return s + a.objetivo; }, 0);
+  var totVenta = d.vendedor.reduce(function (s, a) { return s + a.venta; }, 0);
+  document.getElementById('obj-kpis').innerHTML =
+    KPI('Objetivo', '$' + F(totObj), '#e3ecf7') +
+    KPI('Venta', '$' + F(totVenta), '#00e5ff') +
+    KPI('% Cumplimiento', P(totObj ? totVenta / totObj * 100 : 0), totVenta >= totObj ? '#69f0ae' : '#ffab40');
+
+  document.getElementById('obj-tb').innerHTML = d.vendedor.length ? d.vendedor.map(function (v) {
+    return '<tr><td>' + v.vendedor + '</td><td>$' + F(v.objetivo) + '</td><td>$' + F(v.venta) + '</td>' +
+      '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + Math.min(v.pct_cumplimiento, 100) + '%;background:' + (v.pct_cumplimiento >= 100 ? '#69f0ae' : '#ffab40') + '"></div></div>' + P(v.pct_cumplimiento) + '</div></td>' +
+      '<td>$' + F(v.rechazo) + '</td><td>$' + F(v.cambio) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="empty">Sin objetivo cargado para este período</td></tr>';
+}
+
+// ---------- EVOLUCION MENSUAL ----------
+function renderEvolucion() {
+  document.getElementById('evo-tb').innerHTML = D_EVOLUCION.length ? D_EVOLUCION.map(function (e) {
+    return '<tr><td>' + e.mes_label + '</td><td>$' + F(e.venta) + '</td><td>$' + F(e.rechazo) + '</td>' +
+      '<td><span class="' + pctClass(e.pct_rechazo) + '">' + P(e.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(e.rentabilidad) + '</td><td>' + P(e.pct_rentabilidad) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="empty">Sin datos</td></tr>';
+}
+
+// ---------- CLIENTES (tendencia) ----------
+function renderClientes() {
+  var d = curData();
+  document.getElementById('cli-tend-tb').innerHTML = d.clientes.length ? d.clientes.map(function (c) {
+    var cls = c.variacion < 0 ? 'br' : (c.variacion > 0 ? 'bg' : 'by');
+    return '<tr><td>' + (c.razon_social || c.cliente_id) + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.venta_mes_anterior) + '</td>' +
+      '<td><span class="' + cls + '">$' + F(c.variacion) + '</span></td><td>' + P(c.pct_variacion) + '</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="empty">Sin datos comparables (falta mes anterior)</td></tr>';
+}
+
+// ---------- POR PRODUCTO ----------
+function renderProducto() {
+  var d = curData();
+  document.getElementById('prod-tb').innerHTML = d.producto.length ? d.producto.map(function (p) {
+    return '<tr><td>' + p.producto + '</td><td>$' + F(p.venta) + '</td><td>' + FI(p.unidades) + '</td></tr>';
+  }).join('') : '<tr><td colspan="3" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('rubro-tb').innerHTML = d.rubro.length ? d.rubro.map(function (r) {
+    return '<tr><td>' + r.rubro + '</td><td>$' + F(r.venta) + '</td><td>' + FI(r.unidades) + '</td></tr>';
+  }).join('') : '<tr><td colspan="3" class="empty">Sin datos en el período</td></tr>';
+}
+
 // ---------- EXPORT EXCEL ----------
 function dl(rows, filename) {
   var ws = XLSX.utils.json_to_sheet(rows);
@@ -369,6 +425,11 @@ function dlRentChofer() { dl(curData().rent_chofer, 'pyp_rentabilidad_por_chofer
 function dlDescProv() { dl(curData().desc_prov, 'pyp_descuentos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlDescChofer() { dl(curData().desc_chofer, 'pyp_descuentos_por_chofer_' + MES_ACTIVO + '.xlsx'); }
 function dlGeo() { dl(curData().geo, 'pyp_geografia_' + MES_ACTIVO + '.xlsx'); }
+function dlObjetivo() { dl(curData().vendedor, 'pyp_objetivo_' + MES_ACTIVO + '.xlsx'); }
+function dlEvolucion() { dl(D_EVOLUCION, 'pyp_evolucion_mensual.xlsx'); }
+function dlClientes() { dl(curData().clientes, 'pyp_clientes_tendencia_' + MES_ACTIVO + '.xlsx'); }
+function dlProducto() { dl(curData().producto, 'pyp_por_producto_' + MES_ACTIVO + '.xlsx'); }
+function dlRubro() { dl(curData().rubro, 'pyp_por_rubro_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {
   var d = curData();
   var rows = [];

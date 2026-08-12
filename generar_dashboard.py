@@ -66,6 +66,13 @@ def mes_key(fecha):
     return f"{fecha.year:04d}-{fecha.month:02d}"
 
 
+def mes_anterior(m):
+    anio, mes = (int(x) for x in m.split("-"))
+    if mes == 1:
+        return f"{anio - 1:04d}-12"
+    return f"{anio:04d}-{mes - 1:02d}"
+
+
 def make_json(var_name, data):
     return f"var {var_name}={json.dumps(data, ensure_ascii=True, separators=(',', ':'), default=str)};"
 
@@ -108,7 +115,7 @@ def fetch_items(cur, desde, hasta):
                v.motivo_rechazo_desc, v.fecha_comprobante,
                v.vendedor_codigo, v.vendedor_nombre,
                ch.localidad,
-               i.prov_razonsocial, i.prov_codigo,
+               i.prov_razonsocial, i.prov_codigo, i.descripcion AS item_descripcion, i.rubro_desc,
                vi.importe_total_c_imp, vi.importe_iva, vi.cantidad, vi.unidades,
                vi.precio_costo_unitario, vi.precio_unitario, vi.precio_unitario_s_desc
         FROM venta v
@@ -120,6 +127,20 @@ def fetch_items(cur, desde, hasta):
           AND v.tipo_comprobante_codigo IN %(tipos)s
         """,
         {"tenant": TENANT_ID, "desde": desde, "hasta": hasta, "tipos": TIPOS_VALIDOS},
+    )
+    return cur.fetchall()
+
+
+def fetch_objetivos(cur):
+    cur.execute(
+        """
+        SELECT o.descripcion, od.vendedor_codigo, od.vendedor_nombre, sum(od.cantidad) AS objetivo
+        FROM objetivo_detalle od
+        JOIN objetivo o ON o.codigo = od.objetivo_codigo AND o.tenant_id = od.tenant_id
+        WHERE od.tenant_id = %(tenant)s AND od.medida = 'Importe'
+        GROUP BY o.descripcion, od.vendedor_codigo, od.vendedor_nombre
+        """,
+        {"tenant": TENANT_ID},
     )
     return cur.fetchall()
 
@@ -318,6 +339,85 @@ def build_geografia(ordenes):
     return out
 
 
+def build_vendedor(ordenes, objetivos_mes):
+    """Venta real vs objetivo del mes, por vendedor. objetivos_mes: {vendedor_codigo: $objetivo}."""
+    agg = {}
+    for o in ordenes:
+        cod = str(o["vendedor_codigo"]) if o["vendedor_codigo"] else None
+        if not cod:
+            continue
+        nombre = o["vendedor_nombre"] or ("Vendedor " + cod)
+        a = agg.setdefault(cod, {"vendedor": nombre, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+        elif es_cambio(o):
+            a["cambio"] += monto
+        elif not es_devolucion(o):
+            a["venta"] += monto
+    for cod, obj in objetivos_mes.items():
+        if cod not in agg:
+            nombre = None
+            agg[cod] = {"vendedor": "Vendedor " + cod, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0}
+    out = []
+    for cod, a in agg.items():
+        objetivo = sf(objetivos_mes.get(cod))
+        a["objetivo"] = round(objetivo, 2)
+        a["pct_cumplimiento"] = round((a["venta"] / objetivo * 100) if objetivo else 0, 2)
+        a["venta"] = round(a["venta"], 2)
+        a["rechazo"] = round(a["rechazo"], 2)
+        a["cambio"] = round(a["cambio"], 2)
+        out.append(a)
+    out.sort(key=lambda a: -a["venta"])
+    return out
+
+
+def build_producto(items, key_field, label):
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        key = it[key_field] or "Sin especificar"
+        a = agg.setdefault(key, {label: key, "venta": 0.0, "unidades": 0})
+        a["venta"] += abs(sf(it["importe_total_c_imp"]))
+        a["unidades"] += si(sf(it["cantidad"]))
+    out = list(agg.values())
+    for a in out:
+        a["venta"] = round(a["venta"], 2)
+    out.sort(key=lambda a: -a["venta"])
+    return out[:60]
+
+
+def build_clientes_tendencia(ordenes_actual, ordenes_anterior):
+    """Venta por cliente mes actual vs mes anterior. Negativo = cayo, positivo = crecio."""
+    def por_cliente(ordenes):
+        agg = {}
+        for o in ordenes:
+            if o["cliente_id"] is None or es_devolucion(o):
+                continue
+            cid = o["cliente_id"]
+            a = agg.setdefault(cid, {"cliente_id": cid, "razon_social": o["razon_social"], "venta": 0.0})
+            a["venta"] += sf(o["importe_total"])
+        return agg
+
+    actual = por_cliente(ordenes_actual)
+    anterior = por_cliente(ordenes_anterior)
+    out = []
+    for cid, a in actual.items():
+        venta_ant = anterior.get(cid, {}).get("venta", 0.0)
+        var = a["venta"] - venta_ant
+        out.append({
+            "cliente_id": cid,
+            "razon_social": a["razon_social"],
+            "venta": round(a["venta"], 2),
+            "venta_mes_anterior": round(venta_ant, 2),
+            "variacion": round(var, 2),
+            "pct_variacion": round((var / venta_ant * 100) if venta_ant else 0, 2),
+        })
+    out.sort(key=lambda a: a["variacion"])
+    return out[:60]
+
+
 def build_motivo(ordenes):
     agg = {}
     for o in ordenes:
@@ -451,7 +551,7 @@ def inject_data(html, data_js):
     return html[:start] + "\n" + data_js + "\n" + html[end:]
 
 
-def build_mes(ordenes, items):
+def build_mes(ordenes, items, objetivos_mes=None, ordenes_mes_anterior=None):
     kpis = build_kpis(ordenes)
     d_prov = build_prov(items)
     d_chofer = build_chofer(ordenes)
@@ -465,6 +565,10 @@ def build_mes(ordenes, items):
     d_desc_prov = build_descuento_by(items, lambda it: it["prov_razonsocial"])
     d_desc_chofer = build_descuento_by(items, lambda it: it["empleado_chofer_nombre"])
     d_geo = build_geografia(ordenes)
+    d_vendedor = build_vendedor(ordenes, objetivos_mes or {})
+    d_producto = build_producto(items, "item_descripcion", "producto")
+    d_rubro = build_producto(items, "rubro_desc", "rubro")
+    d_clientes = build_clientes_tendencia(ordenes, ordenes_mes_anterior or [])
     return {
         "kpis": kpis,
         "prov": d_prov,
@@ -480,6 +584,10 @@ def build_mes(ordenes, items):
         "desc_prov": d_desc_prov,
         "desc_chofer": d_desc_chofer,
         "geo": d_geo,
+        "vendedor": d_vendedor,
+        "producto": d_producto,
+        "rubro": d_rubro,
+        "clientes": d_clientes,
         "provs": [p["proveedor"] for p in d_prov],
         "chs": [c["chofer"] for c in d_chofer],
         "camiones": [c["camion"] for c in d_camion],
@@ -495,10 +603,22 @@ def main():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         ordenes = fetch_ordenes(cur, desde, hasta)
         items = fetch_items(cur, desde, hasta)
+        objetivos_raw = fetch_objetivos(cur)
     finally:
         conn.close()
 
-    print(f"Ordenes: {len(ordenes)} | Lineas: {len(items)}")
+    print(f"Ordenes: {len(ordenes)} | Lineas: {len(items)} | Filas objetivo: {len(objetivos_raw)}")
+
+    # "OBJ JULIO 2026" -> "2026-07"
+    mes_nombre_a_num = {v.upper(): k for k, v in MES_NOMBRE.items()}
+    objetivo_por_mes = {}
+    for row in objetivos_raw:
+        desc = (row["descripcion"] or "").upper().replace("OBJ", "").strip()
+        partes = desc.split()
+        if len(partes) != 2 or partes[0] not in mes_nombre_a_num:
+            continue
+        m = f"{partes[1]}-{mes_nombre_a_num[partes[0]]:02d}"
+        objetivo_por_mes.setdefault(m, {})[str(row["vendedor_codigo"])] = float(row["objetivo"] or 0)
 
     ordenes_por_mes = {}
     for o in ordenes:
@@ -513,10 +633,30 @@ def main():
     for m in meses:
         anio, mes_num = m.split("-")
         d_mes_label[m] = f"{MES_NOMBRE[int(mes_num)]} {anio}"
-        d_data[m] = build_mes(ordenes_por_mes.get(m, []), items_por_mes.get(m, []))
+        d_data[m] = build_mes(
+            ordenes_por_mes.get(m, []), items_por_mes.get(m, []),
+            objetivos_mes=objetivo_por_mes.get(m, {}),
+            ordenes_mes_anterior=ordenes_por_mes.get(mes_anterior(m), []),
+        )
         print(f"  {m}: {len(ordenes_por_mes.get(m, []))} ordenes, {len(items_por_mes.get(m, []))} lineas")
 
     mes_actual = meses[0] if meses else mes_key(ahora)
+
+    d_evolucion = [
+        {
+            "mes": m,
+            "mes_label": d_mes_label[m],
+            "venta": d_data[m]["kpis"].get("venta_neta", 0),
+            "rechazo": d_data[m]["kpis"].get("rechazo_monto", 0),
+            "pct_rechazo": d_data[m]["kpis"].get("pct_rechazo", 0),
+            "rentabilidad": round(sum(p["rentabilidad"] for p in d_data[m]["rent_prov"]), 2),
+            "pct_rentabilidad": round(
+                (sum(p["rentabilidad"] for p in d_data[m]["rent_prov"]) / sum(p["venta"] for p in d_data[m]["rent_prov"]) * 100)
+                if sum(p["venta"] for p in d_data[m]["rent_prov"]) else 0, 2,
+            ),
+        }
+        for m in sorted(meses)
+    ]
 
     # ---- datos por vendedor (login individual) ----
     vnom = {}
@@ -539,7 +679,11 @@ def main():
             it_v_por_mes.setdefault(mes_key(it["fecha_comprobante"]), []).append(it)
         meses_v = sorted(set(ord_v_por_mes) | set(it_v_por_mes), reverse=True)
         d_vend_data[cod] = {
-            m: build_mes(ord_v_por_mes.get(m, []), it_v_por_mes.get(m, []))
+            m: build_mes(
+                ord_v_por_mes.get(m, []), it_v_por_mes.get(m, []),
+                objetivos_mes={cod: objetivo_por_mes.get(m, {}).get(cod)} if objetivo_por_mes.get(m, {}).get(cod) is not None else {},
+                ordenes_mes_anterior=ord_v_por_mes.get(mes_anterior(m), []),
+            )
             for m in meses_v
         }
 
@@ -548,6 +692,7 @@ def main():
         make_json("D_MES_LABEL", d_mes_label),
         make_json("D_MES_ACTUAL", mes_actual),
         make_json("D_DATA", d_data),
+        make_json("D_EVOLUCION", d_evolucion),
         make_json("D_VVALIDOS", vvalidos),
         make_json("D_VNOM", vnom),
         make_json("D_VEND_DATA", d_vend_data),
