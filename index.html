@@ -148,13 +148,13 @@ tr:hover td{background:#0f1a2a}
     <div class="sr" id="ven-kpis"></div>
     <div class="card"><h3>Ventas por Proveedor <button class="dlbtn" onclick="dlProv()">&#11015; Excel</button></h3>
       <div class="tw"><table>
-        <thead><tr><th>Proveedor</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Unidades</th></tr></thead>
+        <thead><tr><th>Proveedor</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Cambio ($)</th><th>% Cambio</th><th>Unidades</th></tr></thead>
         <tbody id="ven-prov-tb"></tbody>
       </table></div>
     </div>
     <div class="card"><h3>Ventas por Chofer <button class="dlbtn" onclick="dlChofer()">&#11015; Excel</button></h3>
       <div class="tw"><table>
-        <thead><tr><th>Chofer</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Efectividad</th></tr></thead>
+        <thead><tr><th>Chofer</th><th>Venta ($)</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Cambio ($)</th><th>% Cambio</th><th>Efectividad</th></tr></thead>
         <tbody id="ven-ch-tb"></tbody>
       </table></div>
     </div>
@@ -178,6 +178,16 @@ tr:hover td{background:#0f1a2a}
   <div class="sec" id="sec-rechazos">
     <div class="note">Rechazo/Cambio = notas de cr&eacute;dito (NCR). Rechazo puro = NCR sin motivo de canje; Cambio = NCR con motivo de canje.</div>
     <div class="sr" id="rej-kpis"></div>
+    <div class="fbar">
+      <label>Proveedor</label>
+      <select id="rej-prov-f" onchange="renderRechazos()"><option value="">Todos</option></select>
+    </div>
+    <div class="card"><h3>Por Proveedor <button class="dlbtn" onclick="dlProvRech()">&#11015; Excel</button></h3>
+      <div class="tw"><table>
+        <thead><tr><th>Proveedor</th><th>Rechazo ($)</th><th>% Rechazo</th><th>Cambio ($)</th><th>% Cambio</th></tr></thead>
+        <tbody id="rej-prov-tb"></tbody>
+      </table></div>
+    </div>
     <div class="card"><h3>Por Motivo <button class="dlbtn" onclick="dlMotivo()">&#11015; Excel</button></h3>
       <div class="tw"><table>
         <thead><tr><th>Motivo</th><th>Cantidad</th><th>Importe ($)</th><th>% del total</th></tr></thead>

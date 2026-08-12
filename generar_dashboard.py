@@ -103,7 +103,8 @@ def fetch_items(cur, desde, hasta):
     cur.execute(
         """
         SELECT v.id AS venta_id, v.reparto_id, v.empleado_chofer_nombre,
-               v.tipo_comprobante_codigo, v.motivo_cambio_codigo, v.fecha_comprobante,
+               v.tipo_comprobante_codigo, v.motivo_cambio_codigo,
+               v.motivo_rechazo_desc, v.fecha_comprobante,
                i.prov_razonsocial, i.prov_codigo,
                vi.importe_total_c_imp, vi.cantidad, vi.unidades
         FROM venta v
@@ -134,19 +135,22 @@ def build_kpis(ordenes):
     venta_neta = sum(sf(o["importe_total"]) for o in ordenes if not es_devolucion(o))
     rechazo = sum(sf(o["importe_total"]) for o in ordenes if es_rechazo_puro(o))
     cambio = sum(sf(o["importe_total"]) for o in ordenes if es_cambio(o))
-    bruta = venta_neta + rechazo
+    bruta = venta_neta + rechazo + cambio
     comprobantes = len(ordenes)
     clientes = len({o["cliente_id"] for o in ordenes if o["cliente_id"] is not None})
     choferes = len({o["empleado_chofer_id"] for o in ordenes if o["empleado_chofer_id"] is not None})
     repartos = len({o["reparto_id"] for o in ordenes if o["reparto_id"] is not None})
     rechazados = sum(1 for o in ordenes if es_rechazo_puro(o))
+    cambios_cant = sum(1 for o in ordenes if es_cambio(o))
     return {
         "venta_neta": round(venta_neta, 2),
         "rechazo_monto": round(rechazo, 2),
         "cambio_monto": round(cambio, 2),
         "pct_rechazo": round((rechazo / bruta * 100) if bruta else 0, 2),
+        "pct_cambio": round((cambio / bruta * 100) if bruta else 0, 2),
         "comprobantes": comprobantes,
         "rechazados": rechazados,
+        "cambios_cant": cambios_cant,
         "clientes": clientes,
         "choferes": choferes,
         "repartos": repartos,
@@ -157,21 +161,25 @@ def build_prov(items):
     agg = {}
     for it in items:
         prov = it["prov_razonsocial"] or "Sin proveedor"
-        a = agg.setdefault(prov, {"proveedor": prov, "venta": 0.0, "rechazo": 0.0, "unidades": 0})
+        a = agg.setdefault(prov, {"proveedor": prov, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "unidades": 0})
         # a nivel de linea el signo no es confiable (puede venir negativo tanto en
         # facturas como en notas de credito); el total de cabecera si es siempre positivo.
         monto = abs(sf(it["importe_total_c_imp"]))
         if es_rechazo_puro(it):
             a["rechazo"] += monto
+        elif es_cambio(it):
+            a["cambio"] += monto
         elif not es_devolucion(it):
             a["venta"] += monto
         a["unidades"] += si(sf(it["cantidad"]))
     out = list(agg.values())
     for a in out:
-        bruta = a["venta"] + a["rechazo"]
+        bruta = a["venta"] + a["rechazo"] + a["cambio"]
         a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+        a["pct_cambio"] = round((a["cambio"] / bruta * 100) if bruta else 0, 2)
         a["venta"] = round(a["venta"], 2)
         a["rechazo"] = round(a["rechazo"], 2)
+        a["cambio"] = round(a["cambio"], 2)
     out.sort(key=lambda a: -a["venta"])
     return out
 
@@ -180,22 +188,27 @@ def build_chofer(ordenes):
     agg = {}
     for o in ordenes:
         ch = o["empleado_chofer_nombre"] or "Sin asignar"
-        a = agg.setdefault(ch, {"chofer": ch, "venta": 0.0, "rechazo": 0.0, "entregas": 0, "rechazos": 0})
+        a = agg.setdefault(ch, {"chofer": ch, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "entregas": 0, "rechazos": 0, "cambios": 0})
         monto = sf(o["importe_total"])
         if es_rechazo_puro(o):
             a["rechazo"] += monto
             a["rechazos"] += 1
+        elif es_cambio(o):
+            a["cambio"] += monto
+            a["cambios"] += 1
         elif not es_devolucion(o):
             a["venta"] += monto
             a["entregas"] += 1
     out = list(agg.values())
     for a in out:
-        total = a["entregas"] + a["rechazos"]
-        bruta = a["venta"] + a["rechazo"]
+        total = a["entregas"] + a["rechazos"] + a["cambios"]
+        bruta = a["venta"] + a["rechazo"] + a["cambio"]
         a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+        a["pct_cambio"] = round((a["cambio"] / bruta * 100) if bruta else 0, 2)
         a["efectividad"] = round((a["entregas"] / total * 100) if total else 0, 2)
         a["venta"] = round(a["venta"], 2)
         a["rechazo"] = round(a["rechazo"], 2)
+        a["cambio"] = round(a["cambio"], 2)
     out.sort(key=lambda a: -a["venta"])
     return out
 
@@ -215,6 +228,59 @@ def build_motivo(ordenes):
         a["pct"] = round(a["importe"] / total * 100, 2)
         a["importe"] = round(a["importe"], 2)
     out.sort(key=lambda a: -a["importe"])
+    return out
+
+
+def build_motivo_por_prov(items):
+    """Motivo de rechazo desglosado por proveedor, para el filtro de la pestana Rechazos."""
+    by_prov = {}
+    for it in items:
+        if not es_rechazo_puro(it):
+            continue
+        prov = it["prov_razonsocial"] or "Sin proveedor"
+        motivo = it["motivo_rechazo_desc"] or "Sin especificar"
+        agg = by_prov.setdefault(prov, {})
+        a = agg.setdefault(motivo, {"motivo": motivo, "cantidad": 0, "importe": 0.0})
+        a["cantidad"] += 1
+        a["importe"] += abs(sf(it["importe_total_c_imp"]))
+    out = {}
+    for prov, agg in by_prov.items():
+        total = sum(a["importe"] for a in agg.values()) or 1
+        rows = list(agg.values())
+        for a in rows:
+            a["pct"] = round(a["importe"] / total * 100, 2)
+            a["importe"] = round(a["importe"], 2)
+        rows.sort(key=lambda a: -a["importe"])
+        out[prov] = rows
+    return out
+
+
+def build_chofer_por_prov(items):
+    """Rechazo/cambio por chofer desglosado por proveedor, para el filtro de la pestana Rechazos."""
+    by_prov = {}
+    for it in items:
+        prov = it["prov_razonsocial"] or "Sin proveedor"
+        ch = it["empleado_chofer_nombre"] or "Sin asignar"
+        agg = by_prov.setdefault(prov, {})
+        a = agg.setdefault(ch, {"chofer": ch, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0})
+        monto = abs(sf(it["importe_total_c_imp"]))
+        if es_rechazo_puro(it):
+            a["rechazo"] += monto
+        elif es_cambio(it):
+            a["cambio"] += monto
+        elif not es_devolucion(it):
+            a["venta"] += monto
+    out = {}
+    for prov, agg in by_prov.items():
+        rows = [a for a in agg.values() if a["rechazo"] > 0 or a["cambio"] > 0]
+        for a in rows:
+            bruta = a["venta"] + a["rechazo"] + a["cambio"]
+            a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+            a["venta"] = round(a["venta"], 2)
+            a["rechazo"] = round(a["rechazo"], 2)
+            a["cambio"] = round(a["cambio"], 2)
+        rows.sort(key=lambda a: -a["rechazo"])
+        out[prov] = rows
     return out
 
 
@@ -281,12 +347,16 @@ def build_mes(ordenes, items):
     d_prov = build_prov(items)
     d_chofer = build_chofer(ordenes)
     d_motivo = build_motivo(ordenes)
+    d_motivo_prov = build_motivo_por_prov(items)
+    d_chofer_prov = build_chofer_por_prov(items)
     d_routes, d_cli = build_routes_and_clientes(ordenes, items)
     return {
         "kpis": kpis,
         "prov": d_prov,
         "chofer": d_chofer,
         "motivo": d_motivo,
+        "motivo_prov": d_motivo_prov,
+        "chofer_prov": d_chofer_prov,
         "routes": d_routes,
         "cli": d_cli,
         "provs": [p["proveedor"] for p in d_prov],

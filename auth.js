@@ -101,15 +101,17 @@ function renderVentas() {
   provTb.innerHTML = d.prov.length ? d.prov.map(function (p) {
     return '<tr><td>' + p.proveedor + '</td><td>$' + F(p.venta) + '</td><td>$' + F(p.rechazo) + '</td>' +
       '<td><span class="' + pctClass(p.pct_rechazo) + '">' + P(p.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(p.cambio) + '</td><td><span class="' + pctClass(p.pct_cambio) + '">' + P(p.pct_cambio) + '</span></td>' +
       '<td>' + FI(p.unidades) + '</td></tr>';
-  }).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
 
   var chTb = document.getElementById('ven-ch-tb');
   chTb.innerHTML = d.chofer.length ? d.chofer.map(function (c) {
     return '<tr><td>' + c.chofer + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.rechazo) + '</td>' +
       '<td><span class="' + pctClass(c.pct_rechazo) + '">' + P(c.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(c.cambio) + '</td><td><span class="' + pctClass(c.pct_cambio) + '">' + P(c.pct_cambio) + '</span></td>' +
       '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + c.efectividad + '%;background:#00e5ff"></div></div>' + P(c.efectividad) + '</div></td></tr>';
-  }).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
 }
 
 // ---------- HOJA DE RUTA ----------
@@ -178,17 +180,37 @@ function renderRechazos() {
     KPI('Rechazado', '$' + F(k.rechazo_monto), '#ff5252') +
     KPI('% Rechazo', P(k.pct_rechazo), '#ff5252') +
     KPI('Comprobantes rechazados', FI(k.rechazados), '#ff5252') +
-    KPI('Cambios', '$' + F(k.cambio_monto), '#ffab40');
+    KPI('Cambios', '$' + F(k.cambio_monto), '#ffab40') +
+    KPI('% Cambio', P(k.pct_cambio), '#ffab40') +
+    KPI('Comprobantes con cambio', FI(k.cambios_cant), '#ffab40');
 
+  var provSel = document.getElementById('rej-prov-f');
+  var prevSel = provSel.value;
+  provSel.innerHTML = '<option value="">Todos</option>' + d.provs.map(function (p) {
+    return '<option value="' + p + '">' + p + '</option>';
+  }).join('');
+  if (d.provs.indexOf(prevSel) !== -1) provSel.value = prevSel;
+  var prov = provSel.value;
+
+  var provTb = document.getElementById('rej-prov-tb');
+  provTb.innerHTML = d.prov.length ? d.prov.map(function (p) {
+    return '<tr><td>' + p.proveedor + '</td><td>$' + F(p.rechazo) + '</td>' +
+      '<td><span class="' + pctClass(p.pct_rechazo) + '">' + P(p.pct_rechazo) + '</span></td>' +
+      '<td>$' + F(p.cambio) + '</td><td><span class="' + pctClass(p.pct_cambio) + '">' + P(p.pct_cambio) + '</span></td></tr>';
+  }).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+
+  var motivo = prov ? (d.motivo_prov[prov] || []) : d.motivo;
   var motTb = document.getElementById('rej-mot-tb');
-  motTb.innerHTML = d.motivo.length ? d.motivo.map(function (m) {
+  motTb.innerHTML = motivo.length ? motivo.map(function (m) {
     return '<tr><td>' + m.motivo + '</td><td>' + FI(m.cantidad) + '</td><td>$' + F(m.importe) + '</td><td>' + P(m.pct) + '</td></tr>';
   }).join('') : '<tr><td colspan="4" class="empty">Sin rechazos en el período</td></tr>';
 
-  var chList = d.chofer.filter(function (c) { return c.rechazos > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; });
+  var chList = prov
+    ? (d.chofer_prov[prov] || [])
+    : d.chofer.filter(function (c) { return c.rechazos > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; });
   var chTb = document.getElementById('rej-ch-tb');
   chTb.innerHTML = chList.length ? chList.map(function (c) {
-    return '<tr><td>' + c.chofer + '</td><td>' + FI(c.rechazos) + '</td><td>$' + F(c.rechazo) + '</td>' +
+    return '<tr><td>' + c.chofer + '</td><td>' + FI(c.rechazos || '') + '</td><td>$' + F(c.rechazo) + '</td>' +
       '<td><span class="' + pctClass(c.pct_rechazo) + '">' + P(c.pct_rechazo) + '</span></td></tr>';
   }).join('') : '<tr><td colspan="4" class="empty">Sin rechazos en el período</td></tr>';
 }
@@ -203,6 +225,7 @@ function dl(rows, filename) {
 function dlProv() { dl(curData().prov, 'pyp_ventas_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlChofer() { dl(curData().chofer, 'pyp_ventas_por_chofer_' + MES_ACTIVO + '.xlsx'); }
 function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
+function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {
   var d = curData();
   var rows = [];
