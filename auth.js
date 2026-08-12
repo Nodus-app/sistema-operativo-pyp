@@ -97,16 +97,26 @@ function renderVentas() {
     KPI('Choferes', FI(k.choferes), '#e3ecf7') +
     KPI('Repartos', FI(k.repartos), '#e3ecf7');
 
+  var provSel = document.getElementById('ven-prov-f');
+  var prevSel = provSel.value;
+  provSel.innerHTML = '<option value="">Todos</option>' + d.provs.map(function (p) {
+    return '<option value="' + p + '">' + p + '</option>';
+  }).join('');
+  if (d.provs.indexOf(prevSel) !== -1) provSel.value = prevSel;
+  var prov = provSel.value;
+
   var provTb = document.getElementById('ven-prov-tb');
   provTb.innerHTML = d.prov.length ? d.prov.map(function (p) {
-    return '<tr><td>' + p.proveedor + '</td><td>$' + F(p.venta) + '</td><td>$' + F(p.rechazo) + '</td>' +
+    return '<tr' + (p.proveedor === prov ? ' style="background:#0f1a2a"' : '') + '><td>' + p.proveedor + '</td><td>$' + F(p.venta) + '</td><td>$' + F(p.rechazo) + '</td>' +
       '<td><span class="' + pctClass(p.pct_rechazo) + '">' + P(p.pct_rechazo) + '</span></td>' +
       '<td>$' + F(p.cambio) + '</td><td><span class="' + pctClass(p.pct_cambio) + '">' + P(p.pct_cambio) + '</span></td>' +
       '<td>' + FI(p.unidades) + '</td></tr>';
   }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
 
+  var chofer = prov ? (d.chofer_prov[prov] || []) : d.chofer;
+  document.getElementById('ven-ch-titulo').textContent = prov ? ('— ' + prov) : '';
   var chTb = document.getElementById('ven-ch-tb');
-  chTb.innerHTML = d.chofer.length ? d.chofer.map(function (c) {
+  chTb.innerHTML = chofer.length ? chofer.map(function (c) {
     return '<tr><td>' + c.chofer + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.rechazo) + '</td>' +
       '<td><span class="' + pctClass(c.pct_rechazo) + '">' + P(c.pct_rechazo) + '</span></td>' +
       '<td>$' + F(c.cambio) + '</td><td><span class="' + pctClass(c.pct_cambio) + '">' + P(c.pct_cambio) + '</span></td>' +
@@ -206,7 +216,7 @@ function renderRechazos() {
   }).join('') : '<tr><td colspan="4" class="empty">Sin rechazos en el período</td></tr>';
 
   var chList = prov
-    ? (d.chofer_prov[prov] || [])
+    ? (d.chofer_prov[prov] || []).filter(function (c) { return c.rechazo > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; })
     : d.chofer.filter(function (c) { return c.rechazos > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; });
   var chTb = document.getElementById('rej-ch-tb');
   chTb.innerHTML = chList.length ? chList.map(function (c) {
@@ -223,7 +233,12 @@ function dl(rows, filename) {
   XLSX.writeFile(wb, filename);
 }
 function dlProv() { dl(curData().prov, 'pyp_ventas_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
-function dlChofer() { dl(curData().chofer, 'pyp_ventas_por_chofer_' + MES_ACTIVO + '.xlsx'); }
+function dlChofer() {
+  var d = curData();
+  var prov = document.getElementById('ven-prov-f').value;
+  var rows = prov ? (d.chofer_prov[prov] || []) : d.chofer;
+  dl(rows, 'pyp_ventas_por_chofer_' + (prov ? prov.replace(/[^a-z0-9]+/gi, '_') + '_' : '') + MES_ACTIVO + '.xlsx');
+}
 function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
 function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {

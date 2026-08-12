@@ -256,7 +256,8 @@ def build_motivo_por_prov(items):
 
 
 def build_chofer_por_prov(items):
-    """Rechazo/cambio por chofer desglosado por proveedor, para el filtro de la pestana Rechazos."""
+    """Venta/rechazo/cambio por chofer desglosado por proveedor.
+    Se usa para el filtro de proveedor tanto en Ventas como en Rechazos."""
     by_prov = {}
     for it in items:
         prov = it["prov_razonsocial"] or "Sin proveedor"
@@ -272,14 +273,17 @@ def build_chofer_por_prov(items):
             a["venta"] += monto
     out = {}
     for prov, agg in by_prov.items():
-        rows = [a for a in agg.values() if a["rechazo"] > 0 or a["cambio"] > 0]
+        rows = list(agg.values())
         for a in rows:
             bruta = a["venta"] + a["rechazo"] + a["cambio"]
             a["pct_rechazo"] = round((a["rechazo"] / bruta * 100) if bruta else 0, 2)
+            a["pct_cambio"] = round((a["cambio"] / bruta * 100) if bruta else 0, 2)
+            # aproximacion $-ponderada de efectividad (no hay conteo de comprobantes a nivel de linea)
+            a["efectividad"] = round((a["venta"] / bruta * 100) if bruta else 0, 2)
             a["venta"] = round(a["venta"], 2)
             a["rechazo"] = round(a["rechazo"], 2)
             a["cambio"] = round(a["cambio"], 2)
-        rows.sort(key=lambda a: -a["rechazo"])
+        rows.sort(key=lambda a: -a["venta"])
         out[prov] = rows
     return out
 
