@@ -63,11 +63,40 @@ function curData() {
   return fuente || {
     kpis: {}, prov: [], chofer: [], camion: [],
     kpis_camion: {}, prov_camion: {}, chofer_camion: {}, chofer_prov_camion: {},
-    motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {},
-    rent_prov: [], rent_chofer: [], desc_prov: [], desc_chofer: [], geo: [],
-    vendedor: [], producto: [], rubro: [], clientes: [],
+    motivo: [], motivo_prov: {}, motivo_camion: {}, motivo_prov_camion: {}, chofer_prov: {}, routes: [], cli: {},
+    rent_prov: [], rent_chofer: [], rent_prov_camion: {}, rent_chofer_camion: {}, rent_total_camion: {},
+    desc_prov: [], desc_chofer: [], desc_prov_camion: {}, desc_chofer_camion: {},
+    geo: [], geo_camion: {}, vendedor: [], vendedor_camion: {},
+    producto: [], rubro: [], producto_camion: {}, rubro_camion: {},
+    clientes: [], clientes_camion: {}, clientes_camion_anterior: {},
     provs: [], chs: [], camiones: [],
   };
+}
+
+// ---------- CAMION (filtro global "Excluir Camion", afecta TODAS las pestañas) ----------
+var CAM_EXCL = '';
+function initCamSelector() {
+  var d = curData();
+  var sel = document.getElementById('hdr-cam-f');
+  var prev = CAM_EXCL;
+  sel.innerHTML = '<option value="">Ninguno excluido</option>' + (d.camiones || []).map(function (c) {
+    return '<option value="' + c + '">' + c + '</option>';
+  }).join('');
+  if ((d.camiones || []).indexOf(prev) !== -1) {
+    sel.value = prev;
+    CAM_EXCL = prev;
+  } else {
+    sel.value = '';
+    CAM_EXCL = '';
+  }
+}
+function onCamChange() {
+  CAM_EXCL = document.getElementById('hdr-cam-f').value;
+  // invalida el cache de "ya renderizado" de todas las pestañas: si no, al volver a una pestaña
+  // ya visitada antes de tocar el filtro, goTab() no la vuelve a pintar y queda con datos viejos.
+  TAB_INIT = {};
+  rerenderCurrentTab();
+  TAB_INIT[CURRENT_TAB] = true;
 }
 
 function initMesSelector() {
@@ -82,7 +111,12 @@ function onMesChange() {
   MES_ACTIVO = document.getElementById('hdr-mes').value;
   RUTA_SEL = null;
   TAB_INIT = {};
-  var activeBtn = document.querySelector('.tab.on');
+  initCamSelector();
+  rerenderCurrentTab();
+  TAB_INIT[CURRENT_TAB] = true;
+}
+
+function rerenderCurrentTab() {
   if (CURRENT_TAB === 'ventas') renderVentas();
   if (CURRENT_TAB === 'ruta') initRuta();
   if (CURRENT_TAB === 'rechazos') renderRechazos();
@@ -95,7 +129,6 @@ function onMesChange() {
   if (CURRENT_TAB === 'nocompradores') renderNoCompradores();
   if (CURRENT_TAB === 'clientes') renderClientes();
   if (CURRENT_TAB === 'producto') renderProducto();
-  TAB_INIT[CURRENT_TAB] = true;
 }
 
 // ---------- TABS ----------
@@ -109,24 +142,14 @@ function goTab(id, btn) {
   CURRENT_TAB = id;
   if (!TAB_INIT[id]) {
     TAB_INIT[id] = true;
-    if (id === 'ventas') renderVentas();
-    if (id === 'ruta') initRuta();
-    if (id === 'rechazos') renderRechazos();
-    if (id === 'rentabilidad') renderRentabilidad();
-    if (id === 'descuentos') renderDescuentos();
-    if (id === 'geografia') renderGeografia();
-    if (id === 'objetivo') renderObjetivo();
-    if (id === 'evolucion') renderEvolucion();
-    if (id === 'interanual') renderInteranual();
-    if (id === 'nocompradores') renderNoCompradores();
-    if (id === 'clientes') renderClientes();
-    if (id === 'producto') renderProducto();
+    rerenderCurrentTab();
   }
 }
 
 function initApp() {
   applyRoleUI();
   initMesSelector();
+  initCamSelector();
   renderVentas();
   TAB_INIT = { ventas: true };
   CURRENT_TAB = 'ventas';
@@ -230,21 +253,147 @@ function camChoferListExcluyendo(choferCamion, excl) {
   return out;
 }
 
+function camMotivoListExcluyendo(motivoCamion, excl) {
+  var agg = {};
+  Object.keys(motivoCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var motivos = motivoCamion[cam];
+    Object.keys(motivos).forEach(function (m) {
+      var v = motivos[m];
+      var a = agg[m] || (agg[m] = { motivo: m, cantidad: 0, importe: 0 });
+      a.cantidad += v.cantidad || 0; a.importe += v.importe || 0;
+    });
+  });
+  var out = Object.keys(agg).map(function (m) { return agg[m]; });
+  var total = out.reduce(function (s, a) { return s + a.importe; }, 0) || 1;
+  out.forEach(function (a) { a.pct = a.importe / total * 100; });
+  out.sort(function (a, b) { return b.importe - a.importe; });
+  return out;
+}
+
+function camRentListExcluyendo(byCamion, excl) {
+  var agg = {};
+  Object.keys(byCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var grupos = byCamion[cam];
+    Object.keys(grupos).forEach(function (g) {
+      var c = grupos[g];
+      var a = agg[g] || (agg[g] = { grupo: g, venta: 0, costo: 0 });
+      a.venta += c.venta || 0; a.costo += c.costo || 0;
+    });
+  });
+  var out = Object.keys(agg).map(function (g) { return agg[g]; });
+  out.forEach(function (a) {
+    a.rentabilidad = a.venta - a.costo;
+    a.pct_rentabilidad = a.venta ? (a.rentabilidad / a.venta * 100) : 0;
+  });
+  out.sort(function (a, b) { return b.rentabilidad - a.rentabilidad; });
+  return out;
+}
+
+function camDescListExcluyendo(byCamion, excl) {
+  var agg = {};
+  Object.keys(byCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var grupos = byCamion[cam];
+    Object.keys(grupos).forEach(function (g) {
+      var c = grupos[g];
+      var a = agg[g] || (agg[g] = { grupo: g, venta_sin_desc: 0, descuento: 0 });
+      a.venta_sin_desc += c.venta_sin_desc || 0; a.descuento += c.descuento || 0;
+    });
+  });
+  var out = Object.keys(agg).map(function (g) { return agg[g]; });
+  out.forEach(function (a) { a.pct_descuento = a.venta_sin_desc ? (a.descuento / a.venta_sin_desc * 100) : 0; });
+  out.sort(function (a, b) { return b.descuento - a.descuento; });
+  return out;
+}
+
+function camGeoListExcluyendo(geoCamion, excl) {
+  var agg = {};
+  Object.keys(geoCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var locs = geoCamion[cam];
+    Object.keys(locs).forEach(function (loc) {
+      var v = locs[loc];
+      var a = agg[loc] || (agg[loc] = { localidad: loc, venta: 0, rechazo: 0, cambio: 0, clientesSet: {} });
+      a.venta += v.venta || 0; a.rechazo += v.rechazo || 0; a.cambio += v.cambio || 0;
+      (v.clientes || []).forEach(function (id) { a.clientesSet[id] = 1; });
+    });
+  });
+  var out = Object.keys(agg).map(function (loc) {
+    var a = agg[loc], bruta = a.venta + a.rechazo + a.cambio;
+    return {
+      localidad: loc, venta: a.venta, rechazo: a.rechazo, cambio: a.cambio,
+      pct_rechazo: bruta ? (a.rechazo / bruta * 100) : 0, clientes: Object.keys(a.clientesSet).length,
+    };
+  });
+  out.sort(function (a, b) { return b.venta - a.venta; });
+  return out;
+}
+
+function camVendedorListExcluyendo(vendCamion, baseList, excl) {
+  var agg = {};
+  Object.keys(vendCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var cods = vendCamion[cam];
+    Object.keys(cods).forEach(function (cod) {
+      var v = cods[cod];
+      var a = agg[cod] || (agg[cod] = { venta: 0, rechazo: 0, cambio: 0 });
+      a.venta += v.venta || 0; a.rechazo += v.rechazo || 0; a.cambio += v.cambio || 0;
+    });
+  });
+  var out = (baseList || []).map(function (b) {
+    var a = agg[b.cod] || { venta: 0, rechazo: 0, cambio: 0 };
+    return {
+      vendedor: b.vendedor, objetivo: b.objetivo, venta: a.venta, rechazo: a.rechazo, cambio: a.cambio,
+      pct_cumplimiento: b.objetivo ? (a.venta / b.objetivo * 100) : 0,
+    };
+  });
+  out.sort(function (a, b) { return b.venta - a.venta; });
+  return out;
+}
+
+function camProductoListExcluyendo(prodCamion, labelField, excl) {
+  var agg = {};
+  Object.keys(prodCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var keys = prodCamion[cam];
+    Object.keys(keys).forEach(function (k) {
+      var v = keys[k];
+      var a = agg[k] || (agg[k] = { venta: 0, unidades: 0 });
+      a.venta += v.venta || 0; a.unidades += v.unidades || 0;
+    });
+  });
+  var out = Object.keys(agg).map(function (k) {
+    var o = { venta: agg[k].venta, unidades: agg[k].unidades };
+    o[labelField] = k;
+    return o;
+  });
+  out.sort(function (a, b) { return b.venta - a.venta; });
+  return out.slice(0, 60);
+}
+
+function camClientesCollapse(byCamion, excl) {
+  var agg = {};
+  Object.keys(byCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var clis = byCamion[cam];
+    Object.keys(clis).forEach(function (cid) {
+      var v = clis[cid];
+      var a = agg[cid] || (agg[cid] = { venta: 0, razon_social: v.razon_social });
+      a.venta += v.venta || 0;
+    });
+  });
+  return agg;
+}
+
 // filas actualmente mostradas en cada tabla de la pestana Ventas, usadas por los botones de Excel
 // para que la descarga coincida con lo que se ve en pantalla (incluida la exclusion de camion)
 var VEN_TB_ACTUAL = { prov: [], chofer: [], camion: [] };
 
 function renderVentas() {
   var d = curData();
-
-  // el select de camion se arma primero porque KPIs/Proveedor/Chofer dependen de el
-  var camSel = document.getElementById('ven-cam-f');
-  var prevCam = camSel.value;
-  camSel.innerHTML = '<option value="">Ninguno excluido</option>' + d.camiones.map(function (c) {
-    return '<option value="' + c + '">' + c + '</option>';
-  }).join('');
-  if (d.camiones.indexOf(prevCam) !== -1) camSel.value = prevCam;
-  var camExcl = camSel.value;
+  var camExcl = CAM_EXCL;
 
   var k = camExcl ? camKpisExcluyendo(d.kpis_camion, camExcl) : (d.kpis || {});
   document.getElementById('ven-kpis').innerHTML =
@@ -319,6 +468,7 @@ function filtRuta() {
   var ch = document.getElementById('ruta-ch').value;
   var q = (document.getElementById('ruta-q').value || '').toLowerCase();
   var list = d.routes.filter(function (r) { return !ch || r.chofer === ch; });
+  if (CAM_EXCL) list = list.filter(function (r) { return r.vehiculo !== CAM_EXCL; });
   if (q) {
     list = list.filter(function (r) {
       var clientes = d.cli[String(r.reparto_id)] || [];
@@ -364,9 +514,11 @@ function selRuta(id) {
 }
 
 // ---------- RECHAZOS ----------
+var REJ_ACTUAL = { prov: [], motivo: [] };
 function renderRechazos() {
   var d = curData();
-  var k = d.kpis || {};
+  var camExcl = CAM_EXCL;
+  var k = camExcl ? camKpisExcluyendo(d.kpis_camion, camExcl) : (d.kpis || {});
   document.getElementById('rej-kpis').innerHTML =
     KPI('Rechazado', '$' + F(k.rechazo_monto), '#ff5252') +
     KPI('% Rechazo', P(k.pct_rechazo), '#ff5252') +
@@ -383,22 +535,37 @@ function renderRechazos() {
   if (d.provs.indexOf(prevSel) !== -1) provSel.value = prevSel;
   var prov = provSel.value;
 
+  var provList = camExcl ? camProvListExcluyendo(d.prov_camion, camExcl) : d.prov;
+  REJ_ACTUAL.prov = provList;
   var provTb = document.getElementById('rej-prov-tb');
-  provTb.innerHTML = d.prov.length ? d.prov.map(function (p) {
+  provTb.innerHTML = provList.length ? provList.map(function (p) {
     return '<tr><td>' + p.proveedor + '</td><td>$' + F(p.rechazo) + '</td>' +
       '<td><span class="' + pctClass(p.pct_rechazo) + '">' + P(p.pct_rechazo) + '</span></td>' +
       '<td>$' + F(p.cambio) + '</td><td><span class="' + pctClass(p.pct_cambio) + '">' + P(p.pct_cambio) + '</span></td></tr>';
   }).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
 
-  var motivo = prov ? (d.motivo_prov[prov] || []) : d.motivo;
+  var motivo;
+  if (camExcl) {
+    motivo = prov ? camMotivoListExcluyendo((d.motivo_prov_camion || {})[prov] || {}, camExcl)
+                  : camMotivoListExcluyendo(d.motivo_camion, camExcl);
+  } else {
+    motivo = prov ? (d.motivo_prov[prov] || []) : d.motivo;
+  }
+  REJ_ACTUAL.motivo = motivo;
   var motTb = document.getElementById('rej-mot-tb');
   motTb.innerHTML = motivo.length ? motivo.map(function (m) {
     return '<tr><td>' + m.motivo + '</td><td>' + FI(m.cantidad) + '</td><td>$' + F(m.importe) + '</td><td>' + P(m.pct) + '</td></tr>';
   }).join('') : '<tr><td colspan="4" class="empty">Sin rechazos en el período</td></tr>';
 
-  var chList = prov
-    ? (d.chofer_prov[prov] || []).filter(function (c) { return c.rechazo > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; })
-    : d.chofer.filter(function (c) { return c.rechazos > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; });
+  var choferBase;
+  if (camExcl) {
+    choferBase = prov
+      ? camChoferListExcluyendo((d.chofer_prov_camion || {})[prov] || {}, camExcl)
+      : camChoferListExcluyendo(d.chofer_camion, camExcl);
+  } else {
+    choferBase = prov ? (d.chofer_prov[prov] || []) : d.chofer;
+  }
+  var chList = choferBase.filter(function (c) { return c.rechazo > 0; }).sort(function (a, b) { return b.rechazo - a.rechazo; });
   var chTb = document.getElementById('rej-ch-tb');
   chTb.innerHTML = chList.length ? chList.map(function (c) {
     return '<tr><td>' + c.chofer + '</td><td>' + FI(c.rechazos || '') + '</td><td>$' + F(c.rechazo) + '</td>' +
@@ -411,10 +578,15 @@ function rentRow(a) {
   return '<tr><td>' + a.grupo + '</td><td>$' + F(a.venta) + '</td><td>$' + F(a.costo) + '</td>' +
     '<td>$' + F(a.rentabilidad) + '</td><td><span class="' + (a.pct_rentabilidad < 0 ? 'br' : (a.pct_rentabilidad < 10 ? 'by' : 'bg')) + '">' + P(a.pct_rentabilidad) + '</span></td></tr>';
 }
+var RENT_ACTUAL = { prov: [], chofer: [] };
 function renderRentabilidad() {
   var d = curData();
-  var totVenta = d.rent_prov.reduce(function (s, a) { return s + a.venta; }, 0);
-  var totCosto = d.rent_prov.reduce(function (s, a) { return s + a.costo; }, 0);
+  var camExcl = CAM_EXCL;
+  var rentProv = camExcl ? camRentListExcluyendo(d.rent_prov_camion, camExcl) : d.rent_prov;
+  var rentChofer = camExcl ? camRentListExcluyendo(d.rent_chofer_camion, camExcl) : d.rent_chofer;
+  RENT_ACTUAL.prov = rentProv; RENT_ACTUAL.chofer = rentChofer;
+  var totVenta = rentProv.reduce(function (s, a) { return s + a.venta; }, 0);
+  var totCosto = rentProv.reduce(function (s, a) { return s + a.costo; }, 0);
   var totRent = totVenta - totCosto;
   document.getElementById('rent-kpis').innerHTML =
     KPI('Venta', '$' + F(totVenta), '#00e5ff') +
@@ -422,10 +594,10 @@ function renderRentabilidad() {
     KPI('Rentabilidad', '$' + F(totRent), totRent >= 0 ? '#69f0ae' : '#ff5252') +
     KPI('% Rentabilidad', P(totVenta ? totRent / totVenta * 100 : 0), totRent >= 0 ? '#69f0ae' : '#ff5252');
 
-  document.getElementById('rent-prov-tb').innerHTML = d.rent_prov.length
-    ? d.rent_prov.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
-  document.getElementById('rent-ch-tb').innerHTML = d.rent_chofer.length
-    ? d.rent_chofer.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('rent-prov-tb').innerHTML = rentProv.length
+    ? rentProv.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('rent-ch-tb').innerHTML = rentChofer.length
+    ? rentChofer.map(rentRow).join('') : '<tr><td colspan="5" class="empty">Sin datos en el período</td></tr>';
 }
 
 // ---------- DESCUENTOS ----------
@@ -433,25 +605,33 @@ function descRow(a) {
   return '<tr><td>' + a.grupo + '</td><td>$' + F(a.venta_sin_desc) + '</td><td>$' + F(a.descuento) + '</td>' +
     '<td><span class="' + pctClass(a.pct_descuento) + '">' + P(a.pct_descuento) + '</span></td></tr>';
 }
+var DESC_ACTUAL = { prov: [], chofer: [] };
 function renderDescuentos() {
   var d = curData();
-  var totDesc = d.desc_prov.reduce(function (s, a) { return s + a.descuento; }, 0);
-  var totSinDesc = d.desc_prov.reduce(function (s, a) { return s + a.venta_sin_desc; }, 0);
+  var camExcl = CAM_EXCL;
+  var descProv = camExcl ? camDescListExcluyendo(d.desc_prov_camion, camExcl) : d.desc_prov;
+  var descChofer = camExcl ? camDescListExcluyendo(d.desc_chofer_camion, camExcl) : d.desc_chofer;
+  DESC_ACTUAL.prov = descProv; DESC_ACTUAL.chofer = descChofer;
+  var totDesc = descProv.reduce(function (s, a) { return s + a.descuento; }, 0);
+  var totSinDesc = descProv.reduce(function (s, a) { return s + a.venta_sin_desc; }, 0);
   document.getElementById('desc-kpis').innerHTML =
     KPI('Venta sin Dto.', '$' + F(totSinDesc), '#e3ecf7') +
     KPI('Descuento', '$' + F(totDesc), '#ffab40') +
     KPI('% Descuento', P(totSinDesc ? totDesc / totSinDesc * 100 : 0), '#ffab40');
 
-  document.getElementById('desc-prov-tb').innerHTML = d.desc_prov.length
-    ? d.desc_prov.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
-  document.getElementById('desc-ch-tb').innerHTML = d.desc_chofer.length
-    ? d.desc_chofer.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('desc-prov-tb').innerHTML = descProv.length
+    ? descProv.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
+  document.getElementById('desc-ch-tb').innerHTML = descChofer.length
+    ? descChofer.map(descRow).join('') : '<tr><td colspan="4" class="empty">Sin datos en el período</td></tr>';
 }
 
 // ---------- GEOGRAFIA ----------
+var GEO_ACTUAL = [];
 function renderGeografia() {
   var d = curData();
-  document.getElementById('geo-tb').innerHTML = d.geo.length ? d.geo.map(function (g) {
+  var geo = CAM_EXCL ? camGeoListExcluyendo(d.geo_camion, CAM_EXCL) : d.geo;
+  GEO_ACTUAL = geo;
+  document.getElementById('geo-tb').innerHTML = geo.length ? geo.map(function (g) {
     return '<tr><td>' + g.localidad + '</td><td>$' + F(g.venta) + '</td><td>$' + F(g.rechazo) + '</td>' +
       '<td><span class="' + pctClass(g.pct_rechazo) + '">' + P(g.pct_rechazo) + '</span></td>' +
       '<td>$' + F(g.cambio) + '</td><td>' + FI(g.clientes) + '</td></tr>';
@@ -459,16 +639,19 @@ function renderGeografia() {
 }
 
 // ---------- OBJETIVO DEL MES ----------
+var OBJ_ACTUAL = [];
 function renderObjetivo() {
   var d = curData();
-  var totObj = d.vendedor.reduce(function (s, a) { return s + a.objetivo; }, 0);
-  var totVenta = d.vendedor.reduce(function (s, a) { return s + a.venta; }, 0);
+  var vendedor = CAM_EXCL ? camVendedorListExcluyendo(d.vendedor_camion, d.vendedor, CAM_EXCL) : d.vendedor;
+  OBJ_ACTUAL = vendedor;
+  var totObj = vendedor.reduce(function (s, a) { return s + a.objetivo; }, 0);
+  var totVenta = vendedor.reduce(function (s, a) { return s + a.venta; }, 0);
   document.getElementById('obj-kpis').innerHTML =
     KPI('Objetivo', '$' + F(totObj), '#e3ecf7') +
     KPI('Venta', '$' + F(totVenta), '#00e5ff') +
     KPI('% Cumplimiento', P(totObj ? totVenta / totObj * 100 : 0), totVenta >= totObj ? '#69f0ae' : '#ffab40');
 
-  document.getElementById('obj-tb').innerHTML = d.vendedor.length ? d.vendedor.map(function (v) {
+  document.getElementById('obj-tb').innerHTML = vendedor.length ? vendedor.map(function (v) {
     return '<tr><td>' + v.vendedor + '</td><td>$' + F(v.objetivo) + '</td><td>$' + F(v.venta) + '</td>' +
       '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + Math.min(v.pct_cumplimiento, 100) + '%;background:' + (v.pct_cumplimiento >= 100 ? '#69f0ae' : '#ffab40') + '"></div></div>' + P(v.pct_cumplimiento) + '</div></td>' +
       '<td>$' + F(v.rechazo) + '</td><td>$' + F(v.cambio) + '</td></tr>';
@@ -476,8 +659,28 @@ function renderObjetivo() {
 }
 
 // ---------- EVOLUCION MENSUAL ----------
+var EVO_ACTUAL = [];
+function evoFilaExcluyendo(e) {
+  var camData = (D_EVOLUCION_CAMION || {})[e.mes];
+  if (!camData) return e;
+  var k = camKpisExcluyendo(camData.kpis, CAM_EXCL);
+  var rentAgg = { venta: 0, costo: 0 };
+  Object.keys(camData.rent || {}).forEach(function (cam) {
+    if (cam === CAM_EXCL) return;
+    rentAgg.venta += camData.rent[cam].venta || 0;
+    rentAgg.costo += camData.rent[cam].costo || 0;
+  });
+  var rentabilidad = rentAgg.venta - rentAgg.costo;
+  return {
+    mes: e.mes, mes_label: e.mes_label,
+    venta: k.venta_neta, rechazo: k.rechazo_monto, pct_rechazo: k.pct_rechazo,
+    rentabilidad: rentabilidad, pct_rentabilidad: rentAgg.venta ? (rentabilidad / rentAgg.venta * 100) : 0,
+  };
+}
 function renderEvolucion() {
-  document.getElementById('evo-tb').innerHTML = D_EVOLUCION.length ? D_EVOLUCION.map(function (e) {
+  var rows = CAM_EXCL ? D_EVOLUCION.map(evoFilaExcluyendo) : D_EVOLUCION;
+  EVO_ACTUAL = rows;
+  document.getElementById('evo-tb').innerHTML = rows.length ? rows.map(function (e) {
     return '<tr><td>' + e.mes_label + '</td><td>$' + F(e.venta) + '</td><td>$' + F(e.rechazo) + '</td>' +
       '<td><span class="' + pctClass(e.pct_rechazo) + '">' + P(e.pct_rechazo) + '</span></td>' +
       '<td>$' + F(e.rentabilidad) + '</td><td>' + P(e.pct_rentabilidad) + '</td></tr>';
@@ -505,18 +708,67 @@ function interRenderTabla(tbId, periodoElId, rows, total, periodo) {
   }
   document.getElementById(tbId).innerHTML = html;
 }
+// recombina unidades/peso/venta por proveedor de ambos periodos (actual y anterior) excluyendo
+// un camion, y arma tanto las filas como el total, con el mismo shape que D_INTERANUAL(_MES).
+function camInteranualExcluyendo(camActual, camAnterior, excl) {
+  function collapse(byCamion) {
+    var agg = {};
+    Object.keys(byCamion || {}).forEach(function (cam) {
+      if (cam === excl) return;
+      var provs = byCamion[cam];
+      Object.keys(provs).forEach(function (p) {
+        var v = provs[p];
+        var a = agg[p] || (agg[p] = { unidades: 0, peso_kg: 0, venta: 0 });
+        a.unidades += v.unidades || 0; a.peso_kg += v.peso_kg || 0; a.venta += v.venta || 0;
+      });
+    });
+    return agg;
+  }
+  function pct(n, o) { return o ? ((n - o) / o * 100) : null; }
+  var actual = collapse(camActual), anterior = collapse(camAnterior);
+  var provs = {};
+  Object.keys(actual).forEach(function (p) { provs[p] = 1; });
+  Object.keys(anterior).forEach(function (p) { provs[p] = 1; });
+  var vacio = { unidades: 0, peso_kg: 0, venta: 0 };
+  var out = Object.keys(provs).map(function (p) {
+    var a = actual[p] || vacio, o = anterior[p] || vacio;
+    return {
+      proveedor: p,
+      unidades_actual: a.unidades, unidades_anterior: o.unidades, var_unidades: pct(a.unidades, o.unidades),
+      peso_actual: a.peso_kg, peso_anterior: o.peso_kg, var_peso: pct(a.peso_kg, o.peso_kg),
+      venta_actual: a.venta, venta_anterior: o.venta, var_venta: pct(a.venta, o.venta),
+    };
+  });
+  out.sort(function (x, y) { return y.venta_actual - x.venta_actual; });
+  var tot1 = { unidades: 0, peso_kg: 0, venta: 0 }, tot0 = { unidades: 0, peso_kg: 0, venta: 0 };
+  Object.keys(actual).forEach(function (p) { tot1.unidades += actual[p].unidades; tot1.peso_kg += actual[p].peso_kg; tot1.venta += actual[p].venta; });
+  Object.keys(anterior).forEach(function (p) { tot0.unidades += anterior[p].unidades; tot0.peso_kg += anterior[p].peso_kg; tot0.venta += anterior[p].venta; });
+  var total = {
+    proveedor: 'TOTAL',
+    unidades_actual: tot1.unidades, unidades_anterior: tot0.unidades, var_unidades: pct(tot1.unidades, tot0.unidades),
+    peso_actual: tot1.peso_kg, peso_anterior: tot0.peso_kg, var_peso: pct(tot1.peso_kg, tot0.peso_kg),
+    venta_actual: tot1.venta, venta_anterior: tot0.venta, var_venta: pct(tot1.venta, tot0.venta),
+  };
+  return { rows: out, total: total };
+}
+var INTER_ACTUAL = { mes: [], anio: [] };
 function renderInteranual() {
-  interRenderTabla('inter-mes-tb', 'inter-mes-periodo', D_INTERANUAL_MES, D_INTERANUAL_MES_TOTAL, D_INTERANUAL_MES_PERIODO);
-  interRenderTabla('inter-tb', 'inter-periodo', D_INTERANUAL, D_INTERANUAL_TOTAL, D_INTERANUAL_PERIODO);
+  if (CAM_EXCL) {
+    var mesR = camInteranualExcluyendo(D_INTERANUAL_MES_CAMION_ACTUAL, D_INTERANUAL_MES_CAMION_ANTERIOR, CAM_EXCL);
+    interRenderTabla('inter-mes-tb', 'inter-mes-periodo', mesR.rows, mesR.total, D_INTERANUAL_MES_PERIODO);
+    INTER_ACTUAL.mes = mesR.rows.concat([mesR.total]);
+    var anioR = camInteranualExcluyendo(D_INTERANUAL_CAMION_ACTUAL, D_INTERANUAL_CAMION_ANTERIOR, CAM_EXCL);
+    interRenderTabla('inter-tb', 'inter-periodo', anioR.rows, anioR.total, D_INTERANUAL_PERIODO);
+    INTER_ACTUAL.anio = anioR.rows.concat([anioR.total]);
+  } else {
+    interRenderTabla('inter-mes-tb', 'inter-mes-periodo', D_INTERANUAL_MES, D_INTERANUAL_MES_TOTAL, D_INTERANUAL_MES_PERIODO);
+    INTER_ACTUAL.mes = (D_INTERANUAL_MES || []).concat(D_INTERANUAL_MES_TOTAL ? [D_INTERANUAL_MES_TOTAL] : []);
+    interRenderTabla('inter-tb', 'inter-periodo', D_INTERANUAL, D_INTERANUAL_TOTAL, D_INTERANUAL_PERIODO);
+    INTER_ACTUAL.anio = (D_INTERANUAL || []).concat(D_INTERANUAL_TOTAL ? [D_INTERANUAL_TOTAL] : []);
+  }
 }
-function dlInteranual() {
-  var rows = (D_INTERANUAL || []).concat(D_INTERANUAL_TOTAL ? [D_INTERANUAL_TOTAL] : []);
-  dl(rows, 'pyp_evolucion_interanual_acumulado.xlsx');
-}
-function dlInteranualMes() {
-  var rows = (D_INTERANUAL_MES || []).concat(D_INTERANUAL_MES_TOTAL ? [D_INTERANUAL_MES_TOTAL] : []);
-  dl(rows, 'pyp_evolucion_interanual_mes.xlsx');
-}
+function dlInteranual() { dl(INTER_ACTUAL.anio, 'pyp_evolucion_interanual_acumulado.xlsx'); }
+function dlInteranualMes() { dl(INTER_ACTUAL.mes, 'pyp_evolucion_interanual_mes.xlsx'); }
 
 // ---------- NO COMPRADORES ----------
 function diasClass(d) {
@@ -524,9 +776,38 @@ function diasClass(d) {
   if (d >= 90) return 'by';
   return 'bg';
 }
+// recalcula ultima compra por cliente-proveedor excluyendo un camion: toma el maximo entre
+// los camiones restantes y vuelve a aplicar la ventana de 15-365 dias (igual que Python).
+function camNoCompradoresExcluyendo(excl) {
+  var agg = {};
+  Object.keys(D_NO_COMPRADORES_CAMION || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var keys = D_NO_COMPRADORES_CAMION[cam];
+    Object.keys(keys).forEach(function (key) {
+      var v = keys[key];
+      var a = agg[key];
+      if (!a || v.ultima_compra > a.ultima_compra) agg[key] = v;
+    });
+  });
+  var hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  var out = [];
+  Object.keys(agg).forEach(function (key) {
+    var v = agg[key];
+    var fecha = new Date(v.ultima_compra + 'T00:00:00');
+    var dias = Math.round((hoy - fecha) / 86400000);
+    if (dias < 15 || dias > 365) return;
+    out.push({
+      cliente_id: v.cliente_id, razon_social: v.razon_social, proveedor: v.proveedor,
+      ultima_compra: v.ultima_compra, dias_sin_comprar: dias,
+    });
+  });
+  out.sort(function (a, b) { return b.dias_sin_comprar - a.dias_sin_comprar; });
+  return out;
+}
 var NOC_FILTRADOS = [];
 function renderNoCompradores() {
-  var todos = D_NO_COMPRADORES || [];
+  var todos = CAM_EXCL ? camNoCompradoresExcluyendo(CAM_EXCL) : (D_NO_COMPRADORES || []);
   var provs = [];
   todos.forEach(function (r) { if (provs.indexOf(r.proveedor) === -1) provs.push(r.proveedor); });
   provs.sort();
@@ -551,9 +832,26 @@ function renderNoCompradores() {
 function dlNoCompradores() { dl(NOC_FILTRADOS, 'pyp_no_compradores.xlsx'); }
 
 // ---------- CLIENTES (tendencia) ----------
+function camClientesTendenciaExcluyendo(d, excl) {
+  var actual = camClientesCollapse(d.clientes_camion, excl);
+  var anterior = camClientesCollapse(d.clientes_camion_anterior, excl);
+  var out = Object.keys(actual).map(function (cid) {
+    var a = actual[cid], ventaAnt = (anterior[cid] || {}).venta || 0;
+    var variacion = a.venta - ventaAnt;
+    return {
+      cliente_id: cid, razon_social: a.razon_social, venta: a.venta, venta_mes_anterior: ventaAnt,
+      variacion: variacion, pct_variacion: ventaAnt ? (variacion / ventaAnt * 100) : 0,
+    };
+  });
+  out.sort(function (a, b) { return a.variacion - b.variacion; });
+  return out.slice(0, 60);
+}
+var CLI_TEND_ACTUAL = [];
 function renderClientes() {
   var d = curData();
-  document.getElementById('cli-tend-tb').innerHTML = d.clientes.length ? d.clientes.map(function (c) {
+  var clientes = CAM_EXCL ? camClientesTendenciaExcluyendo(d, CAM_EXCL) : d.clientes;
+  CLI_TEND_ACTUAL = clientes;
+  document.getElementById('cli-tend-tb').innerHTML = clientes.length ? clientes.map(function (c) {
     var cls = c.variacion < 0 ? 'br' : (c.variacion > 0 ? 'bg' : 'by');
     return '<tr><td>' + (c.razon_social || c.cliente_id) + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.venta_mes_anterior) + '</td>' +
       '<td><span class="' + cls + '">$' + F(c.variacion) + '</span></td><td>' + P(c.pct_variacion) + '</td></tr>';
@@ -561,12 +859,17 @@ function renderClientes() {
 }
 
 // ---------- POR PRODUCTO ----------
+var PROD_ACTUAL = { producto: [], rubro: [] };
 function renderProducto() {
   var d = curData();
-  document.getElementById('prod-tb').innerHTML = d.producto.length ? d.producto.map(function (p) {
+  var camExcl = CAM_EXCL;
+  var producto = camExcl ? camProductoListExcluyendo(d.producto_camion, 'producto', camExcl) : d.producto;
+  var rubro = camExcl ? camProductoListExcluyendo(d.rubro_camion, 'rubro', camExcl) : d.rubro;
+  PROD_ACTUAL.producto = producto; PROD_ACTUAL.rubro = rubro;
+  document.getElementById('prod-tb').innerHTML = producto.length ? producto.map(function (p) {
     return '<tr><td>' + p.producto + '</td><td>$' + F(p.venta) + '</td><td>' + FI(p.unidades) + '</td></tr>';
   }).join('') : '<tr><td colspan="3" class="empty">Sin datos en el período</td></tr>';
-  document.getElementById('rubro-tb').innerHTML = d.rubro.length ? d.rubro.map(function (r) {
+  document.getElementById('rubro-tb').innerHTML = rubro.length ? rubro.map(function (r) {
     return '<tr><td>' + r.rubro + '</td><td>$' + F(r.venta) + '</td><td>' + FI(r.unidades) + '</td></tr>';
   }).join('') : '<tr><td colspan="3" class="empty">Sin datos en el período</td></tr>';
 }
@@ -583,23 +886,24 @@ function dlChofer() {
   var prov = document.getElementById('ven-prov-f').value;
   dl(VEN_TB_ACTUAL.chofer, 'pyp_ventas_por_chofer_' + (prov ? prov.replace(/[^a-z0-9]+/gi, '_') + '_' : '') + MES_ACTIVO + '.xlsx');
 }
-function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
-function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlMotivo() { dl(REJ_ACTUAL.motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
+function dlProvRech() { dl(REJ_ACTUAL.prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlCamion() { dl(VEN_TB_ACTUAL.camion, 'pyp_ventas_por_camion_' + MES_ACTIVO + '.xlsx'); }
-function dlRentProv() { dl(curData().rent_prov, 'pyp_rentabilidad_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
-function dlRentChofer() { dl(curData().rent_chofer, 'pyp_rentabilidad_por_chofer_' + MES_ACTIVO + '.xlsx'); }
-function dlDescProv() { dl(curData().desc_prov, 'pyp_descuentos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
-function dlDescChofer() { dl(curData().desc_chofer, 'pyp_descuentos_por_chofer_' + MES_ACTIVO + '.xlsx'); }
-function dlGeo() { dl(curData().geo, 'pyp_geografia_' + MES_ACTIVO + '.xlsx'); }
-function dlObjetivo() { dl(curData().vendedor, 'pyp_objetivo_' + MES_ACTIVO + '.xlsx'); }
-function dlEvolucion() { dl(D_EVOLUCION, 'pyp_evolucion_mensual.xlsx'); }
-function dlClientes() { dl(curData().clientes, 'pyp_clientes_tendencia_' + MES_ACTIVO + '.xlsx'); }
-function dlProducto() { dl(curData().producto, 'pyp_por_producto_' + MES_ACTIVO + '.xlsx'); }
-function dlRubro() { dl(curData().rubro, 'pyp_por_rubro_' + MES_ACTIVO + '.xlsx'); }
+function dlRentProv() { dl(RENT_ACTUAL.prov, 'pyp_rentabilidad_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlRentChofer() { dl(RENT_ACTUAL.chofer, 'pyp_rentabilidad_por_chofer_' + MES_ACTIVO + '.xlsx'); }
+function dlDescProv() { dl(DESC_ACTUAL.prov, 'pyp_descuentos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlDescChofer() { dl(DESC_ACTUAL.chofer, 'pyp_descuentos_por_chofer_' + MES_ACTIVO + '.xlsx'); }
+function dlGeo() { dl(GEO_ACTUAL, 'pyp_geografia_' + MES_ACTIVO + '.xlsx'); }
+function dlObjetivo() { dl(OBJ_ACTUAL, 'pyp_objetivo_' + MES_ACTIVO + '.xlsx'); }
+function dlEvolucion() { dl(EVO_ACTUAL.length ? EVO_ACTUAL : D_EVOLUCION, 'pyp_evolucion_mensual.xlsx'); }
+function dlClientes() { dl(CLI_TEND_ACTUAL, 'pyp_clientes_tendencia_' + MES_ACTIVO + '.xlsx'); }
+function dlProducto() { dl(PROD_ACTUAL.producto, 'pyp_por_producto_' + MES_ACTIVO + '.xlsx'); }
+function dlRubro() { dl(PROD_ACTUAL.rubro, 'pyp_por_rubro_' + MES_ACTIVO + '.xlsx'); }
 function dlRuta() {
   var d = curData();
   var rows = [];
-  d.routes.forEach(function (r) {
+  var routes = CAM_EXCL ? d.routes.filter(function (r) { return r.vehiculo !== CAM_EXCL; }) : d.routes;
+  routes.forEach(function (r) {
     (d.cli[String(r.reparto_id)] || []).forEach(function (c) {
       rows.push({
         reparto: r.reparto_codigo || r.reparto_id, chofer: r.chofer, fecha: r.fecha,

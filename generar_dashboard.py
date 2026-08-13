@@ -179,7 +179,8 @@ def fetch_venta_periodo(cur, desde, hasta):
     tipo_venta='VEN' (ver PYP - Base BI Postgres.md en el vault)."""
     cur.execute(
         """
-        SELECT i.prov_razonsocial, i.peso, vi.cantidad, vi.importe_total_c_imp
+        SELECT i.prov_razonsocial, i.peso, vi.cantidad, vi.importe_total_c_imp,
+               v.vehiculo_codigo, v.vehiculo_descripcion
         FROM venta v
         JOIN venta_item vi ON vi.venta_id = v.id AND vi.tenant_id = v.tenant_id
         LEFT JOIN item i ON i.codigo = vi.item_codigo AND i.tenant_id = v.tenant_id
@@ -245,6 +246,7 @@ def fetch_ultima_compra(cur):
     cur.execute(
         """
         SELECT v.cliente_id, v.razon_social, i.prov_razonsocial,
+               v.vehiculo_codigo, v.vehiculo_descripcion,
                max(v.fecha_entrega) as ultima_compra
         FROM venta v
         JOIN venta_item vi ON vi.venta_id = v.id AND vi.tenant_id = v.tenant_id
@@ -253,7 +255,7 @@ def fetch_ultima_compra(cur):
           AND v.cliente_id IS NOT NULL
           AND (v.tipo_comprobante_codigo IN ('FAC-A', 'FAC-B')
                OR (v.tipo_comprobante_codigo = 'Venta' AND v.tipo_venta = 'VEN'))
-        GROUP BY v.cliente_id, v.razon_social, i.prov_razonsocial
+        GROUP BY v.cliente_id, v.razon_social, i.prov_razonsocial, v.vehiculo_codigo, v.vehiculo_descripcion
         """,
         {"tenant": TENANT_ID},
     )
@@ -263,14 +265,25 @@ def fetch_ultima_compra(cur):
 def build_no_compradores(rows, hoy):
     """Dias desde la ultima compra real, por cliente y proveedor (igual criterio que la medida
     'Dias desde Ultima Compra' del Power BI corporativo: DATEDIFF(UltimaFechaDeCompra, HOY, DAY)).
+    rows viene agrupado tambien por camion (para el filtro global Excluir Camion, ver
+    build_no_compradores_por_camion), asi que primero hay que colapsar al maximo por
+    cliente-proveedor entre todos los camiones.
     Ventana 15-365 dias: menos de 15 todavia no es una alerta (puede ser solo el ciclo normal de
     compra), mas de 365 ya esta tan inactivo que no aporta como alerta accionable de seguimiento
     comercial (son ~1150 combinaciones sobre 7950 totales, quedan fuera)."""
-    out = []
+    colapsado = {}
     for r in rows:
         ultima = r["ultima_compra"]
         if ultima is None:
             continue
+        key = (r["cliente_id"], r["prov_razonsocial"])
+        a = colapsado.get(key)
+        if a is None or ultima > a["ultima_compra"]:
+            colapsado[key] = {"cliente_id": r["cliente_id"], "razon_social": r["razon_social"],
+                               "prov_razonsocial": r["prov_razonsocial"], "ultima_compra": ultima}
+    out = []
+    for r in colapsado.values():
+        ultima = r["ultima_compra"]
         dias = (hoy.date() - ultima.date()).days
         if dias < 15 or dias > 365:
             continue
@@ -534,6 +547,217 @@ def build_chofer_por_prov_por_camion(items):
     return out
 
 
+def build_rentabilidad_by_por_camion(items, key_fn):
+    """Igual que build_rentabilidad_by pero desglosado por camion, para el filtro global Excluir Camion."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        cam = _camion_label(it)
+        key = key_fn(it) or "Sin asignar"
+        a = agg.setdefault(cam, {}).setdefault(key, {"venta": 0.0, "costo": 0.0})
+        a["venta"] += abs(sf(it["importe_total_c_imp"]) - sf(it["importe_iva"]))
+        a["costo"] += sf(it["precio_costo_unitario"]) * sf(it["cantidad"])
+    out = {}
+    for cam, keys in agg.items():
+        out[cam] = {k: {"venta": round(v["venta"], 2), "costo": round(v["costo"], 2)} for k, v in keys.items()}
+    return out
+
+
+def build_rentabilidad_total_por_camion(items):
+    """Rentabilidad total (todos los proveedores juntos) por camion, para Evolucion Mensual."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        cam = _camion_label(it)
+        a = agg.setdefault(cam, {"venta": 0.0, "costo": 0.0})
+        a["venta"] += abs(sf(it["importe_total_c_imp"]) - sf(it["importe_iva"]))
+        a["costo"] += sf(it["precio_costo_unitario"]) * sf(it["cantidad"])
+    return {cam: {"venta": round(v["venta"], 2), "costo": round(v["costo"], 2)} for cam, v in agg.items()}
+
+
+def build_descuento_by_por_camion(items, key_fn):
+    """Igual que build_descuento_by pero desglosado por camion, para el filtro global Excluir Camion."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        cam = _camion_label(it)
+        key = key_fn(it) or "Sin asignar"
+        a = agg.setdefault(cam, {}).setdefault(key, {"venta_sin_desc": 0.0, "descuento": 0.0})
+        cant = sf(it["cantidad"])
+        a["venta_sin_desc"] += sf(it["precio_unitario_s_desc"]) * cant
+        a["descuento"] += (sf(it["precio_unitario_s_desc"]) - sf(it["precio_unitario"])) * cant
+    out = {}
+    for cam, keys in agg.items():
+        out[cam] = {k: {"venta_sin_desc": round(v["venta_sin_desc"], 2), "descuento": round(v["descuento"], 2)}
+                    for k, v in keys.items()}
+    return out
+
+
+def build_geografia_por_camion(ordenes):
+    """Igual que build_geografia pero desglosado por camion (clientes como lista de ids, es
+    conteo DISTINCT igual que en build_kpis_por_camion)."""
+    agg = {}
+    for o in ordenes:
+        cam = _camion_label(o)
+        loc = (o["localidad"] or "Sin especificar").strip().upper()
+        a = agg.setdefault(cam, {}).setdefault(loc, {"venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "clientes": set()})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+        elif es_cambio(o):
+            a["cambio"] += monto
+        elif not es_devolucion(o):
+            a["venta"] += monto
+        if o["cliente_id"] is not None:
+            a["clientes"].add(o["cliente_id"])
+    out = {}
+    for cam, locs in agg.items():
+        out[cam] = {}
+        for loc, v in locs.items():
+            out[cam][loc] = {"venta": round(v["venta"], 2), "rechazo": round(v["rechazo"], 2),
+                              "cambio": round(v["cambio"], 2), "clientes": list(v["clientes"])}
+    return out
+
+
+def build_vendedor_por_camion(ordenes):
+    """Igual que build_vendedor (solo venta/rechazo/cambio, el objetivo no depende del camion)
+    pero desglosado por camion, para el filtro global Excluir Camion."""
+    agg = {}
+    for o in ordenes:
+        cod = str(o["vendedor_codigo"]) if o["vendedor_codigo"] else None
+        if not cod:
+            continue
+        cam = _camion_label(o)
+        a = agg.setdefault(cam, {}).setdefault(cod, {"venta": 0.0, "rechazo": 0.0, "cambio": 0.0})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+        elif es_cambio(o):
+            a["cambio"] += monto
+        elif not es_devolucion(o):
+            a["venta"] += monto
+    out = {}
+    for cam, cods in agg.items():
+        out[cam] = {c: {"venta": round(v["venta"], 2), "rechazo": round(v["rechazo"], 2), "cambio": round(v["cambio"], 2)}
+                    for c, v in cods.items()}
+    return out
+
+
+def build_producto_por_camion(items, key_field):
+    """Igual que build_producto pero desglosado por camion, sin el tope de top 60 (se aplica
+    despues de recalcular en el frontend)."""
+    agg = {}
+    for it in items:
+        if es_devolucion(it):
+            continue
+        cam = _camion_label(it)
+        key = it[key_field] or "Sin especificar"
+        a = agg.setdefault(cam, {}).setdefault(key, {"venta": 0.0, "unidades": 0})
+        a["venta"] += abs(sf(it["importe_total_c_imp"]))
+        a["unidades"] += si(sf(it["cantidad"]))
+    out = {}
+    for cam, keys in agg.items():
+        out[cam] = {k: {"venta": round(v["venta"], 2), "unidades": v["unidades"]} for k, v in keys.items()}
+    return out
+
+
+def build_clientes_por_camion(ordenes):
+    """Venta por cliente desglosada por camion, para recalcular la tendencia de Clientes
+    (mes actual vs mes anterior) al excluir un camion."""
+    agg = {}
+    for o in ordenes:
+        if o["cliente_id"] is None or es_devolucion(o):
+            continue
+        cam = _camion_label(o)
+        cid = o["cliente_id"]
+        a = agg.setdefault(cam, {}).setdefault(cid, {"venta": 0.0, "razon_social": o["razon_social"]})
+        a["venta"] += sf(o["importe_total"])
+    out = {}
+    for cam, clis in agg.items():
+        out[cam] = {str(cid): {"venta": round(v["venta"], 2), "razon_social": v["razon_social"]}
+                    for cid, v in clis.items()}
+    return out
+
+
+def build_motivo_por_camion(ordenes):
+    """Igual que build_motivo pero desglosado por camion, para el filtro global Excluir Camion."""
+    agg = {}
+    for o in ordenes:
+        if not es_rechazo_puro(o):
+            continue
+        cam = _camion_label(o)
+        motivo = o["motivo_rechazo_desc"] or "Sin especificar"
+        a = agg.setdefault(cam, {}).setdefault(motivo, {"cantidad": 0, "importe": 0.0})
+        a["cantidad"] += 1
+        a["importe"] += sf(o["importe_total"])
+    out = {}
+    for cam, motivos in agg.items():
+        out[cam] = {m: {"cantidad": v["cantidad"], "importe": round(v["importe"], 2)} for m, v in motivos.items()}
+    return out
+
+
+def build_motivo_por_prov_por_camion(items):
+    """Igual que build_motivo_por_prov pero con un nivel extra de camion."""
+    agg = {}
+    for it in items:
+        if not es_rechazo_puro(it):
+            continue
+        prov = it["prov_razonsocial"] or "Sin proveedor"
+        cam = _camion_label(it)
+        motivo = it["motivo_rechazo_desc"] or "Sin especificar"
+        a = agg.setdefault(prov, {}).setdefault(cam, {}).setdefault(motivo, {"cantidad": 0, "importe": 0.0})
+        a["cantidad"] += 1
+        a["importe"] += abs(sf(it["importe_total_c_imp"]))
+    out = {}
+    for prov, cams in agg.items():
+        out[prov] = {}
+        for cam, motivos in cams.items():
+            out[prov][cam] = {m: {"cantidad": v["cantidad"], "importe": round(v["importe"], 2)} for m, v in motivos.items()}
+    return out
+
+
+def build_interanual_por_prov_por_camion(rows):
+    """Contribucion por camion a unidades/peso/venta por proveedor, para un periodo ya fetcheado
+    con fetch_venta_periodo (se llama una vez por periodo: actual y anterior, para año y mes)."""
+    agg = {}
+    for r in rows:
+        cam = _camion_label(r)
+        prov = r["prov_razonsocial"] or "Sin proveedor"
+        a = agg.setdefault(cam, {}).setdefault(prov, {"unidades": 0.0, "peso_kg": 0.0, "venta": 0.0})
+        cant = sf(r["cantidad"])
+        a["unidades"] += cant
+        a["peso_kg"] += cant * sf(r["peso"]) / 1000.0
+        a["venta"] += abs(sf(r["importe_total_c_imp"]))
+    out = {}
+    for cam, provs in agg.items():
+        out[cam] = {p: {"unidades": round(v["unidades"]), "peso_kg": round(v["peso_kg"], 1), "venta": round(v["venta"], 2)}
+                    for p, v in provs.items()}
+    return out
+
+
+def build_no_compradores_por_camion(rows):
+    """Ultima compra por cliente-proveedor, desglosada por camion (la fecha maxima que aporta
+    cada camion), para que el frontend pueda recalcular 'ultima compra excluyendo este camion'
+    tomando el maximo entre los camiones restantes."""
+    agg = {}
+    for r in rows:
+        ultima = r["ultima_compra"]
+        if ultima is None:
+            continue
+        cam = _camion_label(r)
+        cliente_id = r["cliente_id"]
+        prov = r["prov_razonsocial"] or "Sin proveedor"
+        razon_social = r["razon_social"] or f"Cliente {cliente_id}"
+        key = f"{cliente_id}|{prov}"
+        d = agg.setdefault(cam, {})
+        d[key] = {"cliente_id": cliente_id, "razon_social": razon_social, "proveedor": prov,
+                  "ultima_compra": ultima.strftime("%Y-%m-%d")}
+    return agg
+
+
 def build_rentabilidad_by(items, key_fn):
     """Rentabilidad = venta neta (sin IVA) - costo (precio_costo_unitario * cantidad).
     precio_costo_unitario no incluye IVA, por eso la venta se netea de importe_iva antes de comparar
@@ -628,6 +852,7 @@ def build_vendedor(ordenes, objetivos_mes):
     out = []
     for cod, a in agg.items():
         objetivo = sf(objetivos_mes.get(cod))
+        a["cod"] = cod
         a["objetivo"] = round(objetivo, 2)
         a["pct_cumplimiento"] = round((a["venta"] / objetivo * 100) if objetivo else 0, 2)
         a["venta"] = round(a["venta"], 2)
@@ -828,17 +1053,30 @@ def build_mes(ordenes, items, objetivos_mes=None, ordenes_mes_anterior=None):
     d_chofer_prov_camion = build_chofer_por_prov_por_camion(items)
     d_motivo = build_motivo(ordenes)
     d_motivo_prov = build_motivo_por_prov(items)
+    d_motivo_camion = build_motivo_por_camion(ordenes)
+    d_motivo_prov_camion = build_motivo_por_prov_por_camion(items)
     d_chofer_prov = build_chofer_por_prov(items)
     d_routes, d_cli = build_routes_and_clientes(ordenes, items)
     d_rent_prov = build_rentabilidad_by(items, lambda it: it["prov_razonsocial"])
     d_rent_chofer = build_rentabilidad_by(items, lambda it: it["empleado_chofer_nombre"])
+    d_rent_prov_camion = build_rentabilidad_by_por_camion(items, lambda it: it["prov_razonsocial"])
+    d_rent_chofer_camion = build_rentabilidad_by_por_camion(items, lambda it: it["empleado_chofer_nombre"])
+    d_rent_total_camion = build_rentabilidad_total_por_camion(items)
     d_desc_prov = build_descuento_by(items, lambda it: it["prov_razonsocial"])
     d_desc_chofer = build_descuento_by(items, lambda it: it["empleado_chofer_nombre"])
+    d_desc_prov_camion = build_descuento_by_por_camion(items, lambda it: it["prov_razonsocial"])
+    d_desc_chofer_camion = build_descuento_by_por_camion(items, lambda it: it["empleado_chofer_nombre"])
     d_geo = build_geografia(ordenes)
+    d_geo_camion = build_geografia_por_camion(ordenes)
     d_vendedor = build_vendedor(ordenes, objetivos_mes or {})
+    d_vendedor_camion = build_vendedor_por_camion(ordenes)
     d_producto = build_producto(items, "item_descripcion", "producto")
     d_rubro = build_producto(items, "rubro_desc", "rubro")
+    d_producto_camion = build_producto_por_camion(items, "item_descripcion")
+    d_rubro_camion = build_producto_por_camion(items, "rubro_desc")
     d_clientes = build_clientes_tendencia(ordenes, ordenes_mes_anterior or [])
+    d_clientes_camion = build_clientes_por_camion(ordenes)
+    d_clientes_camion_anterior = build_clientes_por_camion(ordenes_mes_anterior or [])
     return {
         "kpis": kpis,
         "prov": d_prov,
@@ -850,18 +1088,31 @@ def build_mes(ordenes, items, objetivos_mes=None, ordenes_mes_anterior=None):
         "chofer_prov_camion": d_chofer_prov_camion,
         "motivo": d_motivo,
         "motivo_prov": d_motivo_prov,
+        "motivo_camion": d_motivo_camion,
+        "motivo_prov_camion": d_motivo_prov_camion,
         "chofer_prov": d_chofer_prov,
         "routes": d_routes,
         "cli": d_cli,
         "rent_prov": d_rent_prov,
         "rent_chofer": d_rent_chofer,
+        "rent_prov_camion": d_rent_prov_camion,
+        "rent_chofer_camion": d_rent_chofer_camion,
+        "rent_total_camion": d_rent_total_camion,
         "desc_prov": d_desc_prov,
         "desc_chofer": d_desc_chofer,
+        "desc_prov_camion": d_desc_prov_camion,
+        "desc_chofer_camion": d_desc_chofer_camion,
         "geo": d_geo,
+        "geo_camion": d_geo_camion,
         "vendedor": d_vendedor,
+        "vendedor_camion": d_vendedor_camion,
         "producto": d_producto,
         "rubro": d_rubro,
+        "producto_camion": d_producto_camion,
+        "rubro_camion": d_rubro_camion,
         "clientes": d_clientes,
+        "clientes_camion": d_clientes_camion,
+        "clientes_camion_anterior": d_clientes_camion_anterior,
         "provs": [p["proveedor"] for p in d_prov],
         "chs": [c["chofer"] for c in d_chofer],
         "camiones": [c["camion"] for c in d_camion],
@@ -892,9 +1143,12 @@ def main():
         conn.close()
 
     d_no_compradores = build_no_compradores(rows_ultima_compra, ahora)
+    d_no_compradores_camion = build_no_compradores_por_camion(rows_ultima_compra)
     print(f"No Compradores: {len(d_no_compradores)} combinaciones cliente-proveedor (de {len(rows_ultima_compra)} totales)")
 
     d_interanual, d_interanual_total = build_interanual_por_prov(rows_i_actual, rows_i_anterior)
+    d_interanual_camion_actual = build_interanual_por_prov_por_camion(rows_i_actual)
+    d_interanual_camion_anterior = build_interanual_por_prov_por_camion(rows_i_anterior)
     d_interanual_periodo = {
         "actual": f"{desde_i.strftime('%d/%m/%Y')} – {ahora.strftime('%d/%m/%Y')}",
         "anterior": f"{desde_i_ant.strftime('%d/%m/%Y')} – {(hasta_i_ant - timedelta(days=1)).strftime('%d/%m/%Y')}",
@@ -902,6 +1156,8 @@ def main():
     print(f"Interanual (año): {len(rows_i_actual)} lineas periodo actual, {len(rows_i_anterior)} lineas periodo anterior")
 
     d_interanual_mes, d_interanual_mes_total = build_interanual_por_prov(rows_m_actual, rows_m_anterior)
+    d_interanual_mes_camion_actual = build_interanual_por_prov_por_camion(rows_m_actual)
+    d_interanual_mes_camion_anterior = build_interanual_por_prov_por_camion(rows_m_anterior)
     d_interanual_mes_periodo = {
         "actual": f"{desde_m.strftime('%d/%m/%Y')} – {ahora.strftime('%d/%m/%Y')}",
         "anterior": f"{desde_m_ant.strftime('%d/%m/%Y')} – {(hasta_m_ant - timedelta(days=1)).strftime('%d/%m/%Y')}",
@@ -959,6 +1215,13 @@ def main():
         for m in sorted(meses)
     ]
 
+    # contribucion por camion a cada mes de Evolucion Mensual (kpis ya calculado en build_mes,
+    # rentabilidad total se recalcula ahi mismo), para el filtro global Excluir Camion.
+    d_evolucion_camion = {
+        m: {"kpis": d_data[m]["kpis_camion"], "rent": d_data[m]["rent_total_camion"]}
+        for m in meses
+    }
+
     # ---- datos por vendedor (login individual) ----
     vnom = {}
     for o in ordenes:
@@ -994,13 +1257,19 @@ def main():
         make_json("D_MES_ACTUAL", mes_actual),
         make_json("D_DATA", d_data),
         make_json("D_EVOLUCION", d_evolucion),
+        make_json("D_EVOLUCION_CAMION", d_evolucion_camion),
         make_json("D_INTERANUAL", d_interanual),
         make_json("D_INTERANUAL_TOTAL", d_interanual_total),
         make_json("D_INTERANUAL_PERIODO", d_interanual_periodo),
+        make_json("D_INTERANUAL_CAMION_ACTUAL", d_interanual_camion_actual),
+        make_json("D_INTERANUAL_CAMION_ANTERIOR", d_interanual_camion_anterior),
         make_json("D_INTERANUAL_MES", d_interanual_mes),
         make_json("D_INTERANUAL_MES_TOTAL", d_interanual_mes_total),
         make_json("D_INTERANUAL_MES_PERIODO", d_interanual_mes_periodo),
+        make_json("D_INTERANUAL_MES_CAMION_ACTUAL", d_interanual_mes_camion_actual),
+        make_json("D_INTERANUAL_MES_CAMION_ANTERIOR", d_interanual_mes_camion_anterior),
         make_json("D_NO_COMPRADORES", d_no_compradores),
+        make_json("D_NO_COMPRADORES_CAMION", d_no_compradores_camion),
         make_json("D_VVALIDOS", vvalidos),
         make_json("D_VNOM", vnom),
         make_json("D_VEND_DATA", d_vend_data),
