@@ -75,6 +75,19 @@ def rango_interanual(hoy):
     return desde_actual, hasta_actual, desde_anterior, hasta_anterior
 
 
+def rango_mes_actual_interanual(hoy):
+    """Mes en curso, acumulado a hoy, vs el mismo rango de dias del mismo mes del año anterior."""
+    desde_actual = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    hasta_actual = hoy + timedelta(days=1)
+    desde_anterior = desde_actual.replace(year=desde_actual.year - 1)
+    try:
+        hasta_anterior = hoy.replace(year=hoy.year - 1) + timedelta(days=1)
+    except ValueError:
+        # 29 de febrero en año bisiesto: el año anterior no tiene ese dia
+        hasta_anterior = hoy.replace(year=hoy.year - 1, day=28) + timedelta(days=1)
+    return desde_actual, hasta_actual, desde_anterior, hasta_anterior
+
+
 def mes_key(fecha):
     return f"{fecha.year:04d}-{fecha.month:02d}"
 
@@ -821,6 +834,10 @@ def main():
         desde_i, hasta_i, desde_i_ant, hasta_i_ant = rango_interanual(ahora)
         rows_i_actual = fetch_venta_periodo(cur, desde_i, hasta_i)
         rows_i_anterior = fetch_venta_periodo(cur, desde_i_ant, hasta_i_ant)
+
+        desde_m, hasta_m, desde_m_ant, hasta_m_ant = rango_mes_actual_interanual(ahora)
+        rows_m_actual = fetch_venta_periodo(cur, desde_m, hasta_m)
+        rows_m_anterior = fetch_venta_periodo(cur, desde_m_ant, hasta_m_ant)
     finally:
         conn.close()
 
@@ -829,7 +846,14 @@ def main():
         "actual": f"{desde_i.strftime('%d/%m/%Y')} – {ahora.strftime('%d/%m/%Y')}",
         "anterior": f"{desde_i_ant.strftime('%d/%m/%Y')} – {(hasta_i_ant - timedelta(days=1)).strftime('%d/%m/%Y')}",
     }
-    print(f"Interanual: {len(rows_i_actual)} lineas periodo actual, {len(rows_i_anterior)} lineas periodo anterior")
+    print(f"Interanual (año): {len(rows_i_actual)} lineas periodo actual, {len(rows_i_anterior)} lineas periodo anterior")
+
+    d_interanual_mes, d_interanual_mes_total = build_interanual_por_prov(rows_m_actual, rows_m_anterior)
+    d_interanual_mes_periodo = {
+        "actual": f"{desde_m.strftime('%d/%m/%Y')} – {ahora.strftime('%d/%m/%Y')}",
+        "anterior": f"{desde_m_ant.strftime('%d/%m/%Y')} – {(hasta_m_ant - timedelta(days=1)).strftime('%d/%m/%Y')}",
+    }
+    print(f"Interanual (mes): {len(rows_m_actual)} lineas periodo actual, {len(rows_m_anterior)} lineas periodo anterior")
 
     print(f"Ordenes: {len(ordenes)} | Lineas: {len(items)} | Filas objetivo: {len(objetivos_raw)}")
 
@@ -920,6 +944,9 @@ def main():
         make_json("D_INTERANUAL", d_interanual),
         make_json("D_INTERANUAL_TOTAL", d_interanual_total),
         make_json("D_INTERANUAL_PERIODO", d_interanual_periodo),
+        make_json("D_INTERANUAL_MES", d_interanual_mes),
+        make_json("D_INTERANUAL_MES_TOTAL", d_interanual_mes_total),
+        make_json("D_INTERANUAL_MES_PERIODO", d_interanual_mes_periodo),
         make_json("D_VVALIDOS", vvalidos),
         make_json("D_VNOM", vnom),
         make_json("D_VEND_DATA", d_vend_data),

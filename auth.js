@@ -494,20 +494,26 @@ function interFila(r) {
     '<td>$' + F(r.venta_actual) + '</td><td>$' + F(r.venta_anterior) + '</td>' +
     '<td><span class="' + interVarCls(r.var_venta) + '">' + interVarTxt(r.var_venta) + '</span></td></tr>';
 }
-function renderInteranual() {
-  var periodo = D_INTERANUAL_PERIODO || {};
-  document.getElementById('inter-periodo').textContent =
-    periodo.actual ? ('(' + periodo.actual + ' vs ' + periodo.anterior + ')') : '';
-  var rows = D_INTERANUAL || [];
-  var html = rows.length ? rows.map(interFila).join('') : '<tr><td colspan="10" class="empty">Sin datos</td></tr>';
-  if (rows.length && D_INTERANUAL_TOTAL) {
-    html += interFila(D_INTERANUAL_TOTAL).replace('<tr>', '<tr style="font-weight:700;border-top:2px solid #1c2e47">');
+function interRenderTabla(tbId, periodoElId, rows, total, periodo) {
+  document.getElementById(periodoElId).textContent =
+    (periodo && periodo.actual) ? ('(' + periodo.actual + ' vs ' + periodo.anterior + ')') : '';
+  var html = (rows && rows.length) ? rows.map(interFila).join('') : '<tr><td colspan="10" class="empty">Sin datos</td></tr>';
+  if (rows && rows.length && total) {
+    html += interFila(total).replace('<tr>', '<tr style="font-weight:700;border-top:2px solid #1c2e47">');
   }
-  document.getElementById('inter-tb').innerHTML = html;
+  document.getElementById(tbId).innerHTML = html;
+}
+function renderInteranual() {
+  interRenderTabla('inter-mes-tb', 'inter-mes-periodo', D_INTERANUAL_MES, D_INTERANUAL_MES_TOTAL, D_INTERANUAL_MES_PERIODO);
+  interRenderTabla('inter-tb', 'inter-periodo', D_INTERANUAL, D_INTERANUAL_TOTAL, D_INTERANUAL_PERIODO);
 }
 function dlInteranual() {
   var rows = (D_INTERANUAL || []).concat(D_INTERANUAL_TOTAL ? [D_INTERANUAL_TOTAL] : []);
-  dl(rows, 'pyp_evolucion_interanual.xlsx');
+  dl(rows, 'pyp_evolucion_interanual_acumulado.xlsx');
+}
+function dlInteranualMes() {
+  var rows = (D_INTERANUAL_MES || []).concat(D_INTERANUAL_MES_TOTAL ? [D_INTERANUAL_MES_TOTAL] : []);
+  dl(rows, 'pyp_evolucion_interanual_mes.xlsx');
 }
 
 // ---------- CLIENTES (tendencia) ----------
