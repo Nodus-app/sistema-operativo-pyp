@@ -61,7 +61,9 @@ var MES_ACTIVO = null;
 function curData() {
   var fuente = ROLE === 'vendedor' ? ((D_VEND_DATA[VEND_COD] || {})[MES_ACTIVO]) : D_DATA[MES_ACTIVO];
   return fuente || {
-    kpis: {}, prov: [], chofer: [], camion: [], motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {},
+    kpis: {}, prov: [], chofer: [], camion: [],
+    kpis_camion: {}, prov_camion: {}, chofer_camion: {}, chofer_prov_camion: {},
+    motivo: [], motivo_prov: {}, chofer_prov: {}, routes: [], cli: {},
     rent_prov: [], rent_chofer: [], desc_prov: [], desc_chofer: [], geo: [],
     vendedor: [], producto: [], rubro: [], clientes: [],
     provs: [], chs: [], camiones: [],
@@ -147,9 +149,100 @@ function applyRoleUI() {
 }
 
 // ---------- VENTAS ----------
+
+// Helpers para el filtro "Excluir Camion": los datos vienen precalculados por camion
+// desde Python (d.kpis_camion / d.prov_camion / d.chofer_camion / d.chofer_prov_camion) y
+// acá se suman todos los camiones MENOS el excluido. Venta/rechazo/cambio/unidades/entregas
+// son sumas -> se pueden acumular camion por camion. clientes/choferes/repartos son conteos
+// DISTINCT -> hay que unionar los sets de ids (no alcanza con restar el conteo del camion excluido,
+// porque un mismo cliente puede haber sido atendido por más de un camion en el mes).
+function camKpisExcluyendo(kpisCamion, excl) {
+  var venta_neta = 0, rechazo_monto = 0, cambio_monto = 0, comprobantes = 0, rechazados = 0, cambios_cant = 0;
+  var cli = {}, cho = {}, rep = {};
+  Object.keys(kpisCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var k = kpisCamion[cam];
+    venta_neta += k.venta_neta; rechazo_monto += k.rechazo_monto; cambio_monto += k.cambio_monto;
+    comprobantes += k.comprobantes; rechazados += k.rechazados; cambios_cant += k.cambios_cant;
+    (k.clientes || []).forEach(function (id) { cli[id] = 1; });
+    (k.choferes || []).forEach(function (id) { cho[id] = 1; });
+    (k.repartos || []).forEach(function (id) { rep[id] = 1; });
+  });
+  var bruta = venta_neta + rechazo_monto + cambio_monto;
+  return {
+    venta_neta: venta_neta, rechazo_monto: rechazo_monto, cambio_monto: cambio_monto,
+    pct_rechazo: bruta ? (rechazo_monto / bruta * 100) : 0,
+    pct_cambio: bruta ? (cambio_monto / bruta * 100) : 0,
+    comprobantes: comprobantes, rechazados: rechazados, cambios_cant: cambios_cant,
+    clientes: Object.keys(cli).length, choferes: Object.keys(cho).length, repartos: Object.keys(rep).length,
+  };
+}
+
+// byCamion: {camion: {grupo: {venta,rechazo,cambio,...extraKeys}}} -> suma todos los camiones
+// menos "excl" y devuelve {grupo: {venta,rechazo,cambio,...}} (sin ordenar).
+function camAggExcluyendo(byCamion, excl, extraKeys) {
+  var agg = {};
+  Object.keys(byCamion || {}).forEach(function (cam) {
+    if (cam === excl) return;
+    var grupos = byCamion[cam];
+    Object.keys(grupos).forEach(function (g) {
+      var c = grupos[g];
+      var a = agg[g];
+      if (!a) {
+        a = agg[g] = { venta: 0, rechazo: 0, cambio: 0 };
+        (extraKeys || []).forEach(function (k) { a[k] = 0; });
+      }
+      a.venta += c.venta || 0; a.rechazo += c.rechazo || 0; a.cambio += c.cambio || 0;
+      (extraKeys || []).forEach(function (k) { a[k] += c[k] || 0; });
+    });
+  });
+  return agg;
+}
+
+function camProvListExcluyendo(provCamion, excl) {
+  var agg = camAggExcluyendo(provCamion, excl, ['unidades']);
+  var out = Object.keys(agg).map(function (p) {
+    var a = agg[p], bruta = a.venta + a.rechazo + a.cambio;
+    return {
+      proveedor: p, venta: a.venta, rechazo: a.rechazo, cambio: a.cambio, unidades: a.unidades,
+      pct_rechazo: bruta ? (a.rechazo / bruta * 100) : 0, pct_cambio: bruta ? (a.cambio / bruta * 100) : 0,
+    };
+  });
+  out.sort(function (a, b) { return b.venta - a.venta; });
+  return out;
+}
+
+function camChoferListExcluyendo(choferCamion, excl) {
+  var agg = camAggExcluyendo(choferCamion, excl, ['entregas', 'rechazos', 'cambios']);
+  var out = Object.keys(agg).map(function (c) {
+    var a = agg[c], bruta = a.venta + a.rechazo + a.cambio, total = a.entregas + a.rechazos + a.cambios;
+    return {
+      chofer: c, venta: a.venta, rechazo: a.rechazo, cambio: a.cambio,
+      pct_rechazo: bruta ? (a.rechazo / bruta * 100) : 0, pct_cambio: bruta ? (a.cambio / bruta * 100) : 0,
+      efectividad: total ? (a.entregas / total * 100) : 0,
+    };
+  });
+  out.sort(function (a, b) { return b.venta - a.venta; });
+  return out;
+}
+
+// filas actualmente mostradas en cada tabla de la pestana Ventas, usadas por los botones de Excel
+// para que la descarga coincida con lo que se ve en pantalla (incluida la exclusion de camion)
+var VEN_TB_ACTUAL = { prov: [], chofer: [], camion: [] };
+
 function renderVentas() {
   var d = curData();
-  var k = d.kpis || {};
+
+  // el select de camion se arma primero porque KPIs/Proveedor/Chofer dependen de el
+  var camSel = document.getElementById('ven-cam-f');
+  var prevCam = camSel.value;
+  camSel.innerHTML = '<option value="">Ninguno excluido</option>' + d.camiones.map(function (c) {
+    return '<option value="' + c + '">' + c + '</option>';
+  }).join('');
+  if (d.camiones.indexOf(prevCam) !== -1) camSel.value = prevCam;
+  var camExcl = camSel.value;
+
+  var k = camExcl ? camKpisExcluyendo(d.kpis_camion, camExcl) : (d.kpis || {});
   document.getElementById('ven-kpis').innerHTML =
     KPI('Venta Neta', '$' + F(k.venta_neta), '#00e5ff') +
     KPI('Rechazado', '$' + F(k.rechazo_monto), '#ff5252') +
@@ -168,15 +261,25 @@ function renderVentas() {
   if (d.provs.indexOf(prevSel) !== -1) provSel.value = prevSel;
   var prov = provSel.value;
 
+  var provList = camExcl ? camProvListExcluyendo(d.prov_camion, camExcl) : d.prov;
+  VEN_TB_ACTUAL.prov = provList;
   var provTb = document.getElementById('ven-prov-tb');
-  provTb.innerHTML = d.prov.length ? d.prov.map(function (p) {
+  provTb.innerHTML = provList.length ? provList.map(function (p) {
     return '<tr' + (p.proveedor === prov ? ' style="background:#0f1a2a"' : '') + '><td>' + p.proveedor + '</td><td>$' + F(p.venta) + '</td><td>$' + F(p.rechazo) + '</td>' +
       '<td><span class="' + pctClass(p.pct_rechazo) + '">' + P(p.pct_rechazo) + '</span></td>' +
       '<td>$' + F(p.cambio) + '</td><td><span class="' + pctClass(p.pct_cambio) + '">' + P(p.pct_cambio) + '</span></td>' +
       '<td>' + FI(p.unidades) + '</td></tr>';
   }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
 
-  var chofer = prov ? (d.chofer_prov[prov] || []) : d.chofer;
+  var chofer;
+  if (camExcl) {
+    chofer = prov
+      ? camChoferListExcluyendo((d.chofer_prov_camion || {})[prov] || {}, camExcl)
+      : camChoferListExcluyendo(d.chofer_camion, camExcl);
+  } else {
+    chofer = prov ? (d.chofer_prov[prov] || []) : d.chofer;
+  }
+  VEN_TB_ACTUAL.chofer = chofer;
   document.getElementById('ven-ch-titulo').textContent = prov ? ('— ' + prov) : '';
   var chTb = document.getElementById('ven-ch-tb');
   chTb.innerHTML = chofer.length ? chofer.map(function (c) {
@@ -186,14 +289,9 @@ function renderVentas() {
       '<td><div class="pw"><div class="pb"><div class="pf" style="width:' + c.efectividad + '%;background:#00e5ff"></div></div>' + P(c.efectividad) + '</div></td></tr>';
   }).join('') : '<tr><td colspan="7" class="empty">Sin datos en el período</td></tr>';
 
-  var camSel = document.getElementById('ven-cam-f');
-  var prevCam = camSel.value;
-  camSel.innerHTML = '<option value="">Todos</option>' + d.camiones.map(function (c) {
-    return '<option value="' + c + '">' + c + '</option>';
-  }).join('');
-  if (d.camiones.indexOf(prevCam) !== -1) camSel.value = prevCam;
-  var camSelVal = camSel.value;
-  var camiones = camSelVal ? d.camion.filter(function (c) { return c.camion === camSelVal; }) : d.camion;
+  // tabla Ventas por Camion: lista todos menos el excluido (ya no filtra a "solo este")
+  var camiones = camExcl ? d.camion.filter(function (c) { return c.camion !== camExcl; }) : d.camion;
+  VEN_TB_ACTUAL.camion = camiones;
   var camTb = document.getElementById('ven-cam-tb');
   camTb.innerHTML = camiones.length ? camiones.map(function (c) {
     return '<tr><td>' + c.camion + '</td><td>$' + F(c.venta) + '</td><td>$' + F(c.rechazo) + '</td>' +
@@ -410,16 +508,14 @@ function dl(rows, filename) {
   XLSX.utils.book_append_sheet(wb, ws, 'Datos');
   XLSX.writeFile(wb, filename);
 }
-function dlProv() { dl(curData().prov, 'pyp_ventas_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
+function dlProv() { dl(VEN_TB_ACTUAL.prov, 'pyp_ventas_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlChofer() {
-  var d = curData();
   var prov = document.getElementById('ven-prov-f').value;
-  var rows = prov ? (d.chofer_prov[prov] || []) : d.chofer;
-  dl(rows, 'pyp_ventas_por_chofer_' + (prov ? prov.replace(/[^a-z0-9]+/gi, '_') + '_' : '') + MES_ACTIVO + '.xlsx');
+  dl(VEN_TB_ACTUAL.chofer, 'pyp_ventas_por_chofer_' + (prov ? prov.replace(/[^a-z0-9]+/gi, '_') + '_' : '') + MES_ACTIVO + '.xlsx');
 }
 function dlMotivo() { dl(curData().motivo, 'pyp_rechazos_por_motivo_' + MES_ACTIVO + '.xlsx'); }
 function dlProvRech() { dl(curData().prov, 'pyp_rechazos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
-function dlCamion() { dl(curData().camion, 'pyp_ventas_por_camion_' + MES_ACTIVO + '.xlsx'); }
+function dlCamion() { dl(VEN_TB_ACTUAL.camion, 'pyp_ventas_por_camion_' + MES_ACTIVO + '.xlsx'); }
 function dlRentProv() { dl(curData().rent_prov, 'pyp_rentabilidad_por_proveedor_' + MES_ACTIVO + '.xlsx'); }
 function dlRentChofer() { dl(curData().rent_chofer, 'pyp_rentabilidad_por_chofer_' + MES_ACTIVO + '.xlsx'); }
 function dlDescProv() { dl(curData().desc_prov, 'pyp_descuentos_por_proveedor_' + MES_ACTIVO + '.xlsx'); }

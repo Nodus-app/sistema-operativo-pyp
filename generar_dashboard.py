@@ -111,6 +111,7 @@ def fetch_items(cur, desde, hasta):
     cur.execute(
         """
         SELECT v.id AS venta_id, v.reparto_id, v.empleado_chofer_nombre,
+               v.vehiculo_codigo, v.vehiculo_descripcion,
                v.tipo_comprobante_codigo, v.motivo_cambio_codigo,
                v.motivo_rechazo_desc, v.fecha_comprobante,
                v.vendedor_codigo, v.vendedor_nombre,
@@ -242,7 +243,7 @@ def build_chofer(ordenes):
 def build_camion(ordenes):
     agg = {}
     for o in ordenes:
-        cam = o["vehiculo_descripcion"] or o["vehiculo_codigo"] or "Sin asignar"
+        cam = _camion_label(o)
         a = agg.setdefault(cam, {"camion": cam, "venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "entregas": 0, "rechazos": 0, "cambios": 0})
         monto = sf(o["importe_total"])
         if es_rechazo_puro(o):
@@ -265,6 +266,132 @@ def build_camion(ordenes):
         a["rechazo"] = round(a["rechazo"], 2)
         a["cambio"] = round(a["cambio"], 2)
     out.sort(key=lambda a: -a["venta"])
+    return out
+
+
+def _camion_label(row):
+    return row["vehiculo_descripcion"] or row["vehiculo_codigo"] or "Sin asignar"
+
+
+def build_kpis_por_camion(ordenes):
+    """Contribucion de cada camion a los KPIs globales, para poder recalcular
+    'todos menos este camion' en el frontend (filtro Excluir Camion).
+    clientes/choferes/repartos van como listas de ids (no como conteo) porque son
+    conteos DISTINCT: un mismo cliente/chofer puede aparecer en mas de un camion en
+    el mismo mes, asi que no se pueden restar, hay que rearmar el set en el cliente."""
+    agg = {}
+    for o in ordenes:
+        cam = _camion_label(o)
+        a = agg.setdefault(cam, {
+            "venta_neta": 0.0, "rechazo_monto": 0.0, "cambio_monto": 0.0,
+            "comprobantes": 0, "rechazados": 0, "cambios_cant": 0,
+            "clientes": set(), "choferes": set(), "repartos": set(),
+        })
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo_monto"] += monto
+            a["rechazados"] += 1
+        elif es_cambio(o):
+            a["cambio_monto"] += monto
+            a["cambios_cant"] += 1
+        elif not es_devolucion(o):
+            a["venta_neta"] += monto
+        a["comprobantes"] += 1
+        if o["cliente_id"] is not None:
+            a["clientes"].add(o["cliente_id"])
+        if o["empleado_chofer_id"] is not None:
+            a["choferes"].add(o["empleado_chofer_id"])
+        if o["reparto_id"] is not None:
+            a["repartos"].add(o["reparto_id"])
+    out = {}
+    for cam, a in agg.items():
+        out[cam] = {
+            "venta_neta": round(a["venta_neta"], 2),
+            "rechazo_monto": round(a["rechazo_monto"], 2),
+            "cambio_monto": round(a["cambio_monto"], 2),
+            "comprobantes": a["comprobantes"],
+            "rechazados": a["rechazados"],
+            "cambios_cant": a["cambios_cant"],
+            "clientes": list(a["clientes"]),
+            "choferes": list(a["choferes"]),
+            "repartos": list(a["repartos"]),
+        }
+    return out
+
+
+def build_prov_por_camion(items):
+    """Igual que build_prov pero desglosado por camion, para el filtro Excluir Camion."""
+    agg = {}
+    for it in items:
+        cam = _camion_label(it)
+        prov = it["prov_razonsocial"] or "Sin proveedor"
+        a = agg.setdefault(cam, {}).setdefault(prov, {"venta": 0.0, "rechazo": 0.0, "cambio": 0.0, "unidades": 0})
+        monto = abs(sf(it["importe_total_c_imp"]))
+        if es_rechazo_puro(it):
+            a["rechazo"] += monto
+        elif es_cambio(it):
+            a["cambio"] += monto
+        elif not es_devolucion(it):
+            a["venta"] += monto
+        a["unidades"] += si(sf(it["cantidad"]))
+    out = {}
+    for cam, provs in agg.items():
+        out[cam] = {p: {"venta": round(v["venta"], 2), "rechazo": round(v["rechazo"], 2),
+                         "cambio": round(v["cambio"], 2), "unidades": v["unidades"]}
+                    for p, v in provs.items()}
+    return out
+
+
+def build_chofer_por_camion(ordenes):
+    """Igual que build_chofer pero desglosado por camion, para el filtro Excluir Camion."""
+    agg = {}
+    for o in ordenes:
+        cam = _camion_label(o)
+        ch = o["empleado_chofer_nombre"] or "Sin asignar"
+        a = agg.setdefault(cam, {}).setdefault(ch, {"venta": 0.0, "rechazo": 0.0, "cambio": 0.0,
+                                                      "entregas": 0, "rechazos": 0, "cambios": 0})
+        monto = sf(o["importe_total"])
+        if es_rechazo_puro(o):
+            a["rechazo"] += monto
+            a["rechazos"] += 1
+        elif es_cambio(o):
+            a["cambio"] += monto
+            a["cambios"] += 1
+        elif not es_devolucion(o):
+            a["venta"] += monto
+            a["entregas"] += 1
+    out = {}
+    for cam, chs in agg.items():
+        out[cam] = {c: {"venta": round(v["venta"], 2), "rechazo": round(v["rechazo"], 2),
+                         "cambio": round(v["cambio"], 2), "entregas": v["entregas"],
+                         "rechazos": v["rechazos"], "cambios": v["cambios"]}
+                    for c, v in chs.items()}
+    return out
+
+
+def build_chofer_por_prov_por_camion(items):
+    """Igual que build_chofer_por_prov pero con un nivel extra de camion, para poder
+    excluir un camion aunque el usuario tambien tenga un proveedor seleccionado."""
+    agg = {}
+    for it in items:
+        prov = it["prov_razonsocial"] or "Sin proveedor"
+        cam = _camion_label(it)
+        ch = it["empleado_chofer_nombre"] or "Sin asignar"
+        a = agg.setdefault(prov, {}).setdefault(cam, {}).setdefault(ch, {"venta": 0.0, "rechazo": 0.0, "cambio": 0.0})
+        monto = abs(sf(it["importe_total_c_imp"]))
+        if es_rechazo_puro(it):
+            a["rechazo"] += monto
+        elif es_cambio(it):
+            a["cambio"] += monto
+        elif not es_devolucion(it):
+            a["venta"] += monto
+    out = {}
+    for prov, cams in agg.items():
+        out[prov] = {}
+        for cam, chs in cams.items():
+            out[prov][cam] = {c: {"venta": round(v["venta"], 2), "rechazo": round(v["rechazo"], 2),
+                                   "cambio": round(v["cambio"], 2)}
+                               for c, v in chs.items()}
     return out
 
 
@@ -556,6 +683,10 @@ def build_mes(ordenes, items, objetivos_mes=None, ordenes_mes_anterior=None):
     d_prov = build_prov(items)
     d_chofer = build_chofer(ordenes)
     d_camion = build_camion(ordenes)
+    d_kpis_camion = build_kpis_por_camion(ordenes)
+    d_prov_camion = build_prov_por_camion(items)
+    d_chofer_camion = build_chofer_por_camion(ordenes)
+    d_chofer_prov_camion = build_chofer_por_prov_por_camion(items)
     d_motivo = build_motivo(ordenes)
     d_motivo_prov = build_motivo_por_prov(items)
     d_chofer_prov = build_chofer_por_prov(items)
@@ -574,6 +705,10 @@ def build_mes(ordenes, items, objetivos_mes=None, ordenes_mes_anterior=None):
         "prov": d_prov,
         "chofer": d_chofer,
         "camion": d_camion,
+        "kpis_camion": d_kpis_camion,
+        "prov_camion": d_prov_camion,
+        "chofer_camion": d_chofer_camion,
+        "chofer_prov_camion": d_chofer_prov_camion,
         "motivo": d_motivo,
         "motivo_prov": d_motivo_prov,
         "chofer_prov": d_chofer_prov,
