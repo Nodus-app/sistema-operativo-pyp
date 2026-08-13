@@ -90,7 +90,7 @@ def fetch_ordenes(cur, desde, hasta):
                v.vehiculo_id, v.vehiculo_codigo, v.vehiculo_descripcion,
                v.cliente_id, v.razon_social,
                ch.direccion, ch.localidad,
-               v.fecha_comprobante, v.numero_comprobante, v.tipo_comprobante_codigo,
+               v.fecha_comprobante, v.fecha_entrega, v.numero_comprobante, v.tipo_comprobante_codigo,
                v.motivo_rechazo_codigo, v.motivo_rechazo_desc,
                v.motivo_cambio_codigo, v.motivo_cambio_desc,
                v.importe_total, v.importe_neto,
@@ -98,9 +98,9 @@ def fetch_ordenes(cur, desde, hasta):
         FROM venta v
         LEFT JOIN cliente_hist ch ON ch.hist_id = v.cliente_hist_id AND ch.tenant_id = v.tenant_id
         WHERE v.tenant_id = %(tenant)s
-          AND v.fecha_comprobante >= %(desde)s AND v.fecha_comprobante < %(hasta)s
+          AND v.fecha_entrega >= %(desde)s AND v.fecha_entrega < %(hasta)s
           AND v.tipo_comprobante_codigo IN %(tipos)s
-        ORDER BY v.fecha_comprobante
+        ORDER BY v.fecha_entrega
         """,
         {"tenant": TENANT_ID, "desde": desde, "hasta": hasta, "tipos": TIPOS_VALIDOS},
     )
@@ -113,7 +113,7 @@ def fetch_items(cur, desde, hasta):
         SELECT v.id AS venta_id, v.reparto_id, v.empleado_chofer_nombre,
                v.vehiculo_codigo, v.vehiculo_descripcion,
                v.tipo_comprobante_codigo, v.motivo_cambio_codigo,
-               v.motivo_rechazo_desc, v.fecha_comprobante,
+               v.motivo_rechazo_desc, v.fecha_comprobante, v.fecha_entrega,
                v.vendedor_codigo, v.vendedor_nombre,
                ch.localidad,
                i.prov_razonsocial, i.prov_codigo, i.descripcion AS item_descripcion, i.rubro_desc,
@@ -124,7 +124,7 @@ def fetch_items(cur, desde, hasta):
         LEFT JOIN item i ON i.codigo = vi.item_codigo AND i.tenant_id = v.tenant_id
         LEFT JOIN cliente_hist ch ON ch.hist_id = v.cliente_hist_id AND ch.tenant_id = v.tenant_id
         WHERE v.tenant_id = %(tenant)s
-          AND v.fecha_comprobante >= %(desde)s AND v.fecha_comprobante < %(hasta)s
+          AND v.fecha_entrega >= %(desde)s AND v.fecha_entrega < %(hasta)s
           AND v.tipo_comprobante_codigo IN %(tipos)s
         """,
         {"tenant": TENANT_ID, "desde": desde, "hasta": hasta, "tipos": TIPOS_VALIDOS},
@@ -639,7 +639,7 @@ def build_routes_and_clientes(ordenes, items):
         r = reparto_agg.setdefault(rid, {
             "reparto_id": rid,
             "reparto_codigo": o["reparto_codigo"],
-            "fecha": o["fecha_comprobante"].strftime("%Y-%m-%d") if o["fecha_comprobante"] else None,
+            "fecha": o["fecha_entrega"].strftime("%Y-%m-%d") if o["fecha_entrega"] else None,
             "chofer": o["empleado_chofer_nombre"] or "Sin asignar",
             "vehiculo": o["vehiculo_descripcion"] or o["vehiculo_codigo"] or "",
             "total": 0.0, "rechazado": 0.0, "clientes": 0,
@@ -757,10 +757,10 @@ def main():
 
     ordenes_por_mes = {}
     for o in ordenes:
-        ordenes_por_mes.setdefault(mes_key(o["fecha_comprobante"]), []).append(o)
+        ordenes_por_mes.setdefault(mes_key(o["fecha_entrega"]), []).append(o)
     items_por_mes = {}
     for it in items:
-        items_por_mes.setdefault(mes_key(it["fecha_comprobante"]), []).append(it)
+        items_por_mes.setdefault(mes_key(it["fecha_entrega"]), []).append(it)
 
     meses = sorted(set(ordenes_por_mes) | set(items_por_mes), reverse=True)
     d_data = {}
@@ -808,10 +808,10 @@ def main():
         it_v = [it for it in items if str(it["vendedor_codigo"]) == cod]
         ord_v_por_mes = {}
         for o in ord_v:
-            ord_v_por_mes.setdefault(mes_key(o["fecha_comprobante"]), []).append(o)
+            ord_v_por_mes.setdefault(mes_key(o["fecha_entrega"]), []).append(o)
         it_v_por_mes = {}
         for it in it_v:
-            it_v_por_mes.setdefault(mes_key(it["fecha_comprobante"]), []).append(it)
+            it_v_por_mes.setdefault(mes_key(it["fecha_entrega"]), []).append(it)
         meses_v = sorted(set(ord_v_por_mes) | set(it_v_por_mes), reverse=True)
         d_vend_data[cod] = {
             m: build_mes(
