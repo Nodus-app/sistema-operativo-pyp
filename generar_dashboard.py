@@ -62,6 +62,19 @@ def rango_historial():
     return desde, hasta, hoy
 
 
+def rango_interanual(hoy):
+    """Año actual desde el 1/1 hasta hoy, y el mismo rango (mismo dia y mes) del año anterior."""
+    desde_actual = hoy.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    hasta_actual = hoy + timedelta(days=1)
+    desde_anterior = desde_actual.replace(year=desde_actual.year - 1)
+    try:
+        hasta_anterior = hoy.replace(year=hoy.year - 1) + timedelta(days=1)
+    except ValueError:
+        # 29 de febrero en año bisiesto: el año anterior no tiene ese dia
+        hasta_anterior = hoy.replace(year=hoy.year - 1, day=28) + timedelta(days=1)
+    return desde_actual, hasta_actual, desde_anterior, hasta_anterior
+
+
 def mes_key(fecha):
     return f"{fecha.year:04d}-{fecha.month:02d}"
 
@@ -144,6 +157,71 @@ def fetch_objetivos(cur):
         {"tenant": TENANT_ID},
     )
     return cur.fetchall()
+
+
+def fetch_venta_periodo(cur, desde, hasta):
+    """Venta real (excluye rechazos/cambios/ajustes) por linea, para un rango de fechas arbitrario.
+    Funciona tanto en el regimen moderno (tipo_comprobante_codigo FAC-A/FAC-B) como en el legacy
+    pre-sept-2025, donde tipo_comprobante_codigo viene siempre 'Venta' y el discriminador real es
+    tipo_venta='VEN' (ver PYP - Base BI Postgres.md en el vault)."""
+    cur.execute(
+        """
+        SELECT i.prov_razonsocial, i.peso, vi.cantidad, vi.importe_total_c_imp
+        FROM venta v
+        JOIN venta_item vi ON vi.venta_id = v.id AND vi.tenant_id = v.tenant_id
+        LEFT JOIN item i ON i.codigo = vi.item_codigo AND i.tenant_id = v.tenant_id
+        WHERE v.tenant_id = %(tenant)s
+          AND v.fecha_entrega >= %(desde)s AND v.fecha_entrega < %(hasta)s
+          AND (v.tipo_comprobante_codigo IN ('FAC-A', 'FAC-B')
+               OR (v.tipo_comprobante_codigo = 'Venta' AND v.tipo_venta = 'VEN'))
+        """,
+        {"tenant": TENANT_ID, "desde": desde, "hasta": hasta},
+    )
+    return cur.fetchall()
+
+
+def build_interanual_por_prov(rows_actual, rows_anterior):
+    """Unidades/peso(kg)/venta($) por proveedor, año actual YTD vs mismo rango del año anterior."""
+    def agg(rows):
+        out = {}
+        for r in rows:
+            prov = r["prov_razonsocial"] or "Sin proveedor"
+            a = out.setdefault(prov, {"unidades": 0.0, "peso_kg": 0.0, "venta": 0.0})
+            cant = sf(r["cantidad"])
+            a["unidades"] += cant
+            a["peso_kg"] += cant * sf(r["peso"]) / 1000.0
+            a["venta"] += abs(sf(r["importe_total_c_imp"]))
+        return out
+
+    a1 = agg(rows_actual)
+    a0 = agg(rows_anterior)
+    provs = sorted(set(a1) | set(a0), key=lambda p: -a1.get(p, {}).get("venta", 0.0))
+
+    def pct(new, old):
+        return round((new - old) / old * 100, 2) if old else None
+
+    def fila(prov, d1, d0):
+        return {
+            "proveedor": prov,
+            "unidades_actual": round(d1["unidades"]), "unidades_anterior": round(d0["unidades"]),
+            "var_unidades": pct(d1["unidades"], d0["unidades"]),
+            "peso_actual": round(d1["peso_kg"], 1), "peso_anterior": round(d0["peso_kg"], 1),
+            "var_peso": pct(d1["peso_kg"], d0["peso_kg"]),
+            "venta_actual": round(d1["venta"], 2), "venta_anterior": round(d0["venta"], 2),
+            "var_venta": pct(d1["venta"], d0["venta"]),
+        }
+
+    vacio = {"unidades": 0.0, "peso_kg": 0.0, "venta": 0.0}
+    out = [fila(p, a1.get(p, vacio), a0.get(p, vacio)) for p in provs]
+
+    tot1 = {"unidades": sum(d["unidades"] for d in a1.values()),
+            "peso_kg": sum(d["peso_kg"] for d in a1.values()),
+            "venta": sum(d["venta"] for d in a1.values())}
+    tot0 = {"unidades": sum(d["unidades"] for d in a0.values()),
+            "peso_kg": sum(d["peso_kg"] for d in a0.values()),
+            "venta": sum(d["venta"] for d in a0.values())}
+    total = fila("TOTAL", tot1, tot0)
+    return out, total
 
 
 def es_devolucion(row):
@@ -739,8 +817,19 @@ def main():
         ordenes = fetch_ordenes(cur, desde, hasta)
         items = fetch_items(cur, desde, hasta)
         objetivos_raw = fetch_objetivos(cur)
+
+        desde_i, hasta_i, desde_i_ant, hasta_i_ant = rango_interanual(ahora)
+        rows_i_actual = fetch_venta_periodo(cur, desde_i, hasta_i)
+        rows_i_anterior = fetch_venta_periodo(cur, desde_i_ant, hasta_i_ant)
     finally:
         conn.close()
+
+    d_interanual, d_interanual_total = build_interanual_por_prov(rows_i_actual, rows_i_anterior)
+    d_interanual_periodo = {
+        "actual": f"{desde_i.strftime('%d/%m/%Y')} – {ahora.strftime('%d/%m/%Y')}",
+        "anterior": f"{desde_i_ant.strftime('%d/%m/%Y')} – {(hasta_i_ant - timedelta(days=1)).strftime('%d/%m/%Y')}",
+    }
+    print(f"Interanual: {len(rows_i_actual)} lineas periodo actual, {len(rows_i_anterior)} lineas periodo anterior")
 
     print(f"Ordenes: {len(ordenes)} | Lineas: {len(items)} | Filas objetivo: {len(objetivos_raw)}")
 
@@ -828,6 +917,9 @@ def main():
         make_json("D_MES_ACTUAL", mes_actual),
         make_json("D_DATA", d_data),
         make_json("D_EVOLUCION", d_evolucion),
+        make_json("D_INTERANUAL", d_interanual),
+        make_json("D_INTERANUAL_TOTAL", d_interanual_total),
+        make_json("D_INTERANUAL_PERIODO", d_interanual_periodo),
         make_json("D_VVALIDOS", vvalidos),
         make_json("D_VNOM", vnom),
         make_json("D_VEND_DATA", d_vend_data),

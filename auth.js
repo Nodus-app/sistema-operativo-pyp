@@ -91,6 +91,7 @@ function onMesChange() {
   if (CURRENT_TAB === 'geografia') renderGeografia();
   if (CURRENT_TAB === 'objetivo') renderObjetivo();
   if (CURRENT_TAB === 'evolucion') renderEvolucion();
+  if (CURRENT_TAB === 'interanual') renderInteranual();
   if (CURRENT_TAB === 'clientes') renderClientes();
   if (CURRENT_TAB === 'producto') renderProducto();
   TAB_INIT[CURRENT_TAB] = true;
@@ -115,6 +116,7 @@ function goTab(id, btn) {
     if (id === 'geografia') renderGeografia();
     if (id === 'objetivo') renderObjetivo();
     if (id === 'evolucion') renderEvolucion();
+    if (id === 'interanual') renderInteranual();
     if (id === 'clientes') renderClientes();
     if (id === 'producto') renderProducto();
   }
@@ -478,6 +480,34 @@ function renderEvolucion() {
       '<td><span class="' + pctClass(e.pct_rechazo) + '">' + P(e.pct_rechazo) + '</span></td>' +
       '<td>$' + F(e.rentabilidad) + '</td><td>' + P(e.pct_rentabilidad) + '</td></tr>';
   }).join('') : '<tr><td colspan="6" class="empty">Sin datos</td></tr>';
+}
+
+// ---------- EVOLUCION INTERANUAL ----------
+function interVarCls(v) { return (v === null || v === undefined) ? '' : (v < 0 ? 'br' : (v > 0 ? 'bg' : 'by')); }
+function interVarTxt(v) { return (v === null || v === undefined) ? 's/d' : ((v >= 0 ? '+' : '') + v.toFixed(1) + '%'); }
+function interFila(r) {
+  return '<tr><td>' + r.proveedor + '</td>' +
+    '<td>' + FI(r.unidades_actual) + '</td><td>' + FI(r.unidades_anterior) + '</td>' +
+    '<td><span class="' + interVarCls(r.var_unidades) + '">' + interVarTxt(r.var_unidades) + '</span></td>' +
+    '<td>' + FI(r.peso_actual) + '</td><td>' + FI(r.peso_anterior) + '</td>' +
+    '<td><span class="' + interVarCls(r.var_peso) + '">' + interVarTxt(r.var_peso) + '</span></td>' +
+    '<td>$' + F(r.venta_actual) + '</td><td>$' + F(r.venta_anterior) + '</td>' +
+    '<td><span class="' + interVarCls(r.var_venta) + '">' + interVarTxt(r.var_venta) + '</span></td></tr>';
+}
+function renderInteranual() {
+  var periodo = D_INTERANUAL_PERIODO || {};
+  document.getElementById('inter-periodo').textContent =
+    periodo.actual ? ('(' + periodo.actual + ' vs ' + periodo.anterior + ')') : '';
+  var rows = D_INTERANUAL || [];
+  var html = rows.length ? rows.map(interFila).join('') : '<tr><td colspan="10" class="empty">Sin datos</td></tr>';
+  if (rows.length && D_INTERANUAL_TOTAL) {
+    html += interFila(D_INTERANUAL_TOTAL).replace('<tr>', '<tr style="font-weight:700;border-top:2px solid #1c2e47">');
+  }
+  document.getElementById('inter-tb').innerHTML = html;
+}
+function dlInteranual() {
+  var rows = (D_INTERANUAL || []).concat(D_INTERANUAL_TOTAL ? [D_INTERANUAL_TOTAL] : []);
+  dl(rows, 'pyp_evolucion_interanual.xlsx');
 }
 
 // ---------- CLIENTES (tendencia) ----------
