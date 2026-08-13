@@ -237,6 +237,54 @@ def build_interanual_por_prov(rows_actual, rows_anterior):
     return out, total
 
 
+def fetch_ultima_compra(cur):
+    """Ultima fecha de compra real (venta, no rechazo/cambio/ajuste) por cliente y proveedor,
+    contra TODO el historico (no se limita a MESES_HISTORIAL como el resto del dashboard),
+    para poder detectar clientes que dejaron de comprarle a un proveedor aunque haga mas de
+    un año. Mismo criterio FAC-A/FAC-B o tipo_venta='VEN' que fetch_venta_periodo."""
+    cur.execute(
+        """
+        SELECT v.cliente_id, v.razon_social, i.prov_razonsocial,
+               max(v.fecha_entrega) as ultima_compra
+        FROM venta v
+        JOIN venta_item vi ON vi.venta_id = v.id AND vi.tenant_id = v.tenant_id
+        LEFT JOIN item i ON i.codigo = vi.item_codigo AND i.tenant_id = v.tenant_id
+        WHERE v.tenant_id = %(tenant)s
+          AND v.cliente_id IS NOT NULL
+          AND (v.tipo_comprobante_codigo IN ('FAC-A', 'FAC-B')
+               OR (v.tipo_comprobante_codigo = 'Venta' AND v.tipo_venta = 'VEN'))
+        GROUP BY v.cliente_id, v.razon_social, i.prov_razonsocial
+        """,
+        {"tenant": TENANT_ID},
+    )
+    return cur.fetchall()
+
+
+def build_no_compradores(rows, hoy):
+    """Dias desde la ultima compra real, por cliente y proveedor (igual criterio que la medida
+    'Dias desde Ultima Compra' del Power BI corporativo: DATEDIFF(UltimaFechaDeCompra, HOY, DAY)).
+    Ventana 15-365 dias: menos de 15 todavia no es una alerta (puede ser solo el ciclo normal de
+    compra), mas de 365 ya esta tan inactivo que no aporta como alerta accionable de seguimiento
+    comercial (son ~1150 combinaciones sobre 7950 totales, quedan fuera)."""
+    out = []
+    for r in rows:
+        ultima = r["ultima_compra"]
+        if ultima is None:
+            continue
+        dias = (hoy.date() - ultima.date()).days
+        if dias < 15 or dias > 365:
+            continue
+        out.append({
+            "cliente_id": r["cliente_id"],
+            "razon_social": r["razon_social"] or f"Cliente {r['cliente_id']}",
+            "proveedor": r["prov_razonsocial"] or "Sin proveedor",
+            "ultima_compra": ultima.strftime("%Y-%m-%d"),
+            "dias_sin_comprar": dias,
+        })
+    out.sort(key=lambda r: -r["dias_sin_comprar"])
+    return out
+
+
 def es_devolucion(row):
     return (row.get("tipo_comprobante_codigo") or "").startswith("NCR")
 
@@ -838,8 +886,13 @@ def main():
         desde_m, hasta_m, desde_m_ant, hasta_m_ant = rango_mes_actual_interanual(ahora)
         rows_m_actual = fetch_venta_periodo(cur, desde_m, hasta_m)
         rows_m_anterior = fetch_venta_periodo(cur, desde_m_ant, hasta_m_ant)
+
+        rows_ultima_compra = fetch_ultima_compra(cur)
     finally:
         conn.close()
+
+    d_no_compradores = build_no_compradores(rows_ultima_compra, ahora)
+    print(f"No Compradores: {len(d_no_compradores)} combinaciones cliente-proveedor (de {len(rows_ultima_compra)} totales)")
 
     d_interanual, d_interanual_total = build_interanual_por_prov(rows_i_actual, rows_i_anterior)
     d_interanual_periodo = {
@@ -947,6 +1000,7 @@ def main():
         make_json("D_INTERANUAL_MES", d_interanual_mes),
         make_json("D_INTERANUAL_MES_TOTAL", d_interanual_mes_total),
         make_json("D_INTERANUAL_MES_PERIODO", d_interanual_mes_periodo),
+        make_json("D_NO_COMPRADORES", d_no_compradores),
         make_json("D_VVALIDOS", vvalidos),
         make_json("D_VNOM", vnom),
         make_json("D_VEND_DATA", d_vend_data),

@@ -92,6 +92,7 @@ function onMesChange() {
   if (CURRENT_TAB === 'objetivo') renderObjetivo();
   if (CURRENT_TAB === 'evolucion') renderEvolucion();
   if (CURRENT_TAB === 'interanual') renderInteranual();
+  if (CURRENT_TAB === 'nocompradores') renderNoCompradores();
   if (CURRENT_TAB === 'clientes') renderClientes();
   if (CURRENT_TAB === 'producto') renderProducto();
   TAB_INIT[CURRENT_TAB] = true;
@@ -117,6 +118,7 @@ function goTab(id, btn) {
     if (id === 'objetivo') renderObjetivo();
     if (id === 'evolucion') renderEvolucion();
     if (id === 'interanual') renderInteranual();
+    if (id === 'nocompradores') renderNoCompradores();
     if (id === 'clientes') renderClientes();
     if (id === 'producto') renderProducto();
   }
@@ -515,6 +517,38 @@ function dlInteranualMes() {
   var rows = (D_INTERANUAL_MES || []).concat(D_INTERANUAL_MES_TOTAL ? [D_INTERANUAL_MES_TOTAL] : []);
   dl(rows, 'pyp_evolucion_interanual_mes.xlsx');
 }
+
+// ---------- NO COMPRADORES ----------
+function diasClass(d) {
+  if (d >= 180) return 'br';
+  if (d >= 90) return 'by';
+  return 'bg';
+}
+var NOC_FILTRADOS = [];
+function renderNoCompradores() {
+  var todos = D_NO_COMPRADORES || [];
+  var provs = [];
+  todos.forEach(function (r) { if (provs.indexOf(r.proveedor) === -1) provs.push(r.proveedor); });
+  provs.sort();
+
+  var provSel = document.getElementById('noc-prov-f');
+  var prevSel = provSel.value;
+  provSel.innerHTML = '<option value="">Todos</option>' + provs.map(function (p) {
+    return '<option value="' + p + '">' + p + '</option>';
+  }).join('');
+  if (provs.indexOf(prevSel) !== -1) provSel.value = prevSel;
+  var prov = provSel.value;
+
+  var rows = prov ? todos.filter(function (r) { return r.proveedor === prov; }) : todos;
+  NOC_FILTRADOS = rows;
+  var tb = document.getElementById('noc-tb');
+  tb.innerHTML = rows.length ? rows.map(function (r) {
+    return '<tr><td>' + (r.razon_social || r.cliente_id) + '</td><td>' + r.proveedor + '</td>' +
+      '<td>' + r.ultima_compra + '</td>' +
+      '<td><span class="' + diasClass(r.dias_sin_comprar) + '">' + FI(r.dias_sin_comprar) + '</span></td></tr>';
+  }).join('') : '<tr><td colspan="4" class="empty">Sin datos</td></tr>';
+}
+function dlNoCompradores() { dl(NOC_FILTRADOS, 'pyp_no_compradores.xlsx'); }
 
 // ---------- CLIENTES (tendencia) ----------
 function renderClientes() {
